@@ -1,5 +1,5 @@
 > Это изменённый личный форк. Актуальные ограничения и рекомендации:
-> [README](../README.md) и [security review](../security/REVIEW.md).
+> [README](../README.md) и [security review](../security/SECURITY-AUDIT.md).
 > Удалённые логи и сторонние прокси в нём отключены; описание upstream ниже
 > сохранено как справка и не является инструкцией запуска форка.
 
