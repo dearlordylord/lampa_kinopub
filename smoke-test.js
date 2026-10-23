@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const code = fs.readFileSync(process.env.KP_TEST_PLUGIN || path.join(__dirname, 'docs', 'kp.js'), 'utf8').replace('  startPlugin();', '  window.__reviewVoiceChips = voiceChipsHtml;\n  startPlugin();');
+const code = fs.readFileSync(process.env.KP_TEST_PLUGIN || path.join(__dirname, 'docs', 'kp.js'), 'utf8').replace('  startPlugin();', '  window.__reviewVoiceChips = voiceChipsHtml; window.__reviewVoiceVisible = isVoiceVisible; window.__reviewVoiceLabel = voiceLabel; window.__reviewFormatForVoice = formatForVoice; window.__reviewVoiceKey = voiceKey;\n  startPlugin();');
 
 // jQuery-ish sham — the plugin only uses $('<...>'), .on, .find, .append, .text,
 // and as a function that returns a thenable-free wrapper.
@@ -152,7 +152,19 @@ try {
 }
 
 const maliciousVoiceHtml = sandbox.window.__reviewVoiceChips([{ lang: 'rus', type: { short_title: '<img src=x onerror=alert(1)>', title: 'Dub' } }], '', '', false);
+const japanese = { index: 2, lang: 'jpn', type: { short_title: 'Original', title: 'Оригинал' }, author: { title: '' } };
+const english = { index: 3, lang: 'eng', type: { short_title: '', title: 'Original audio' }, author: { title: '' } };
+const russian = { index: 1, lang: 'rus', type: { short_title: 'Dub' } };
+const audioFixture = [russian, japanese];
+const formatFixture = [{ urls: { hls2: 'https://cdn2cdn.com/single.m3u8', hls: 'https://cdn2cdn.com/multi.m3u8' } }];
 const checks = [
+  ['Selecting Japanese uses available multi-audio HLS instead of HLS2', sandbox.window.__reviewFormatForVoice('hls2', formatFixture, audioFixture, sandbox.window.__reviewVoiceKey(japanese)) === 'hls'],
+  ['Default Russian keeps stable HLS2', sandbox.window.__reviewFormatForVoice('hls2', formatFixture, audioFixture, sandbox.window.__reviewVoiceKey(russian)) === 'hls2'],
+  ['Explicit HLS4 preference is preserved', sandbox.window.__reviewFormatForVoice('hls4', formatFixture, audioFixture, sandbox.window.__reviewVoiceKey(japanese)) === 'hls4'],
+  ['Japanese original remains selectable without exact Orig marker', sandbox.window.__reviewVoiceVisible(japanese, 'sidebar')],
+  ['English audio remains selectable without exact Orig marker', sandbox.window.__reviewVoiceVisible(english, 'sidebar')],
+  ['Japanese original appears on episode cards', sandbox.window.__reviewVoiceVisible(japanese, 'card')],
+  ['Audio labels identify the language', /JPN/.test(sandbox.window.__reviewVoiceLabel(japanese)) && /ENG/.test(sandbox.window.__reviewVoiceLabel(english))],
   ['voice labels cannot inject HTML tags', maliciousVoiceHtml.includes('&lt;img') && !maliciousVoiceHtml.includes('<img')],
   ['no background author proxy or remote logging requests', xhrRequests.length === 0],
   ['no credential-bearing API calls via a saved third-party proxy', apiRequests.length > 0 && apiRequests.every(r => r.url.startsWith('https://api.service-kp.com/'))],

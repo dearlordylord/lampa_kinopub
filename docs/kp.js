@@ -22,7 +22,7 @@
    *  CONSTANTS                                                   *
    * ============================================================ */
 
-  var PLUGIN_VERSION  = '1.0.73';
+  var PLUGIN_VERSION  = '1.0.73-personal.2';
   // Public manifest-proxy URL — set near KP_PROXY_URL declaration below.
   var COMPONENT_NAME  = 'online_kp';
   var BALANSER        = 'kpapi';
@@ -1460,43 +1460,9 @@
     'Профессиональный':   'Pro'
   };
 
-  /**
-   * Voices matching ANY of these patterns are hidden from BOTH the source
-   * filter sidebar AND the per-episode chips. Eugene's preference list.
-   */
-  var VOICE_HIDDEN_GLOBAL = [/UKR/i, /Пучков/i];
-
-  /**
-   * Hidden ONLY on episode cards (still pickable in sidebar filter — user can
-   * select a "single-voice" / "auteur" / "original" track if they really want).
-   */
-  var VOICE_HIDDEN_CARDS = [/Одноголосый/i, /Авторский/i, /Оригинал/i];
-
-  function audioCheckString(a) {
-    if (!a) return '';
-    return [
-      a.lang || '',
-      (a.type   && a.type.title)   || '',
-      (a.author && a.author.title) || ''
-    ].join(' ');
-  }
-
-  /**
-   * Returns whether an audio track should appear in given context.
-   * @param context 'sidebar' or 'card'
-   *
-   * v1.0.45: lang-based filter (per Eugene's spec).
-   *   card    → lang === 'rus' only
-   *   sidebar → lang === 'rus' OR type.short_title === 'Orig' (keep original
-   *             so user can pick the source-language audio in the player)
-   */
+  // Don't inherit the upstream author's personal language restrictions.
   function isVoiceVisible(a, context) {
-    if (!a) return false;
-    var lang = (a.lang || '').toLowerCase();
-    var isRus = (lang === 'rus' || lang === 'ru');
-    if (context === 'card')    return isRus;
-    if (context === 'sidebar') return isRus || ((a.type && a.type.short_title) === 'Orig');
-    return true;
+    return !!a;
   }
 
   /**
@@ -1533,9 +1499,7 @@
     else if (typeFull)  primary = TYPE_SHORT[typeFull] || typeFull.substring(0, 3);
     else primary = 'UNK';
 
-    // Cards already filter to lang === 'rus' (isVoiceVisible 'card'), so the
-    // "non-rus suffix" branch below is effectively dead — kept for safety
-    // if isVoiceVisible policy changes.
+    // Distinguish original/other languages on episode cards too.
     var lang = (a.lang || '').toUpperCase();
     if (lang && lang !== 'RUS' && lang !== 'RU') {
       primary += ' ' + lang.substring(0, 3);
@@ -1734,7 +1698,7 @@
     var aut = (a.author && a.author.title) || 'unknown';
     var c   = audioCodec(a);
     var codecPart = (c && c.toLowerCase() !== 'aac') ? ' (' + c + ')' : '';
-    return idx + ' - ' + sht + ' - ' + aut + codecPart;
+    return (a.lang ? String(a.lang).toUpperCase() + ' · ' : '') + idx + ' - ' + sht + ' - ' + aut + codecPart;
   }
 
   /**
@@ -1771,6 +1735,20 @@
    * usable by Lampa.Player.play({quality: ...})
    * Plus return the URL for the requested target quality (or the largest available <= maxQuality).
    */
+  // HLS2 can expose only one audio track. Use multi-audio HLS when present
+  // and a different API audio entry has been selected. Keep explicit formats.
+  function formatForVoice(format, files, audios, selectedKey) {
+    if (format !== 'hls2' || !selectedKey) return format;
+    var selected = -1;
+    (audios || []).forEach(function (audio, index) {
+      if (voiceKey(audio) === selectedKey) selected = index;
+    });
+    if (selected > 0 && (files || []).some(function (file) {
+      return !!(file.urls && file.urls.hls);
+    })) return 'hls';
+    return format;
+  }
+
   function pickStream(files, format, target) {
     if (!files || !files.length) return null;
     // 'http' (progressive MP4) is intentionally NOT in any fallback list —
@@ -2291,8 +2269,7 @@
     /**
      * Build a deduped, ordered voice list from a set of audio-track entries
      * (across one or more episodes). Returns [{ key, label }, ...] in
-     * first-seen order. Applies sidebar visibility filter (UKR / Пучков
-     * are hidden everywhere).
+     * first-seen order. Keep every language returned by the API.
      */
     function voiceListFromAudios(audiosArrays) {
       var voiceMap = {};
@@ -2476,7 +2453,7 @@
     }
 
     function streamForElement(element, target) {
-      var fmt = preferredFormat();
+      var fmt = formatForVoice(preferredFormat(), element.kp.files, element.kp.audios, choice.voice_key);
       var stream = pickStream(element.kp.files, fmt, target);
       if (!stream) {
         Logger.warn('source', 'no stream picked', { kind: element.kp.kind, fmt: fmt });
@@ -3839,7 +3816,7 @@
     Logger.info('launch', 'open activity', { id: movie && movie.id, title: ruTitle, orig: origTitle });
     Lampa.Activity.push({
       url:        '',
-      title:      Lampa.Lang.translate('title_online'),
+      title:      'KinoPub · ' + (ruTitle || origTitle || 'Видео'),
       component:  COMPONENT_NAME,
       search:     ruTitle,
       search_one: ruTitle,
