@@ -22,7 +22,7 @@
    *  CONSTANTS                                                   *
    * ============================================================ */
 
-  var PLUGIN_VERSION  = '1.0.73-personal.3';
+  var PLUGIN_VERSION  = '1.0.73-personal.4';
   // Public manifest-proxy URL — set near KP_PROXY_URL declaration below.
   var COMPONENT_NAME  = 'online_kp';
   var BALANSER        = 'kpapi';
@@ -1200,66 +1200,38 @@
     }
   }
 
-  function applyVoiceTrack(idx) {
-    if (KP_BARE_MODE) {
-      Logger.info('voice', 'BARE mode — skipping applyVoiceTrack');
-      return false;
+  // Lampa exposes real backend setters on tracks-event entries; its hls.js
+  // instance is private. Never substitute an API label for the player's tracks.
+  function applyVoiceTrack(tracks) {
+    if (!pendingVoice || !tracks || !tracks.length) return false;
+    function language(value) {
+      var lang = String(value || '').toLowerCase();
+      return ({ ja: 'jpn', jp: 'jpn', ru: 'rus', en: 'eng' })[lang] || lang;
     }
-    if (idx == null || idx < 0) return false;
-
-    // ── Tizen native AVPlayer ─────────────────────────────────────────
+    var wanted = pendingVoice;
+    var lang = language(wanted.lang);
+    var pick = null;
+    var sameLanguage = [];
+    for (var i = 0; i < tracks.length; i++) {
+      var track = tracks[i];
+      var trackLang = language(track.language || track.lang || (track.extra && track.extra.language));
+      var numbered = String(track.name || track.label || '').match(/^0*(\d+)[.\s-]/);
+      if (numbered && Number(numbered[1]) === wanted.index && (!trackLang || trackLang === lang)) pick = track;
+      if (lang && trackLang === lang) sameLanguage.push(track);
+    }
+    if (!pick && sameLanguage.length === 1) pick = sameLanguage[0];
+    // Only use positional mapping for a complete, unlabelled track list.
+    if (!pick && wanted.count === tracks.length && wanted.index > 0) {
+      var candidate = tracks[wanted.index - 1];
+      if (candidate && !candidate.language && !candidate.lang && !(candidate.extra && candidate.extra.language)) pick = candidate;
+    }
+    if (!pick) return false;
     try {
-      if (window.webapis && window.webapis.avplay && typeof window.webapis.avplay.getTotalTrackInfo === 'function') {
-        var tracks = window.webapis.avplay.getTotalTrackInfo() || [];
-        var audios = [];
-        for (var i = 0; i < tracks.length; i++) {
-          if (tracks[i] && (tracks[i].type === 'AUDIO' || tracks[i].type === 1)) {
-            audios.push(tracks[i]);
-          }
-        }
-        if (idx < audios.length) {
-          var nativeIdx = (audios[idx].index != null) ? audios[idx].index : idx;
-          window.webapis.avplay.setSelectTrack('AUDIO', nativeIdx);
-          Logger.info('voice', 'switched via avplay', {
-            idx: idx, nativeIdx: nativeIdx, total: audios.length
-          });
-          return true;
-        }
-        Logger.warn('voice', 'avplay: idx out of range', { idx: idx, total: audios.length });
-      }
-    } catch (e) {
-      Logger.warn('voice', 'avplay setSelectTrack failed', String(e));
-    }
-
-    // ── HTML5 / hls.js ────────────────────────────────────────────────
-    try {
-      var video = document.querySelector('video');
-      if (video) {
-        // Try common attachment patterns. Lampa's bundle may not expose hls,
-        // in which case this fails silently and the stream plays in default
-        // audio track.
-        var hls = video.__hls__ || video._hls || video.hls ||
-                  (window.Lampa && window.Lampa.PlayerVideo && window.Lampa.PlayerVideo.hls);
-        if (hls && typeof hls.audioTrack !== 'undefined') {
-          hls.audioTrack = idx;
-          Logger.info('voice', 'switched via hls.js', { idx: idx });
-          return true;
-        }
-        // Native HTMLMediaElement.audioTracks (rare on TVs but spec'd)
-        if (video.audioTracks && video.audioTracks.length > idx) {
-          for (var t = 0; t < video.audioTracks.length; t++) {
-            video.audioTracks[t].enabled = (t === idx);
-          }
-          Logger.info('voice', 'switched via HTMLMediaElement.audioTracks', { idx: idx });
-          return true;
-        }
-      }
-    } catch (e) {
-      Logger.warn('voice', 'hls.js audioTrack failed', String(e));
-    }
-
-    Logger.warn('voice', 'no track switch backend available, stream stays on default audio');
-    return false;
+      tracks.forEach(function (track) { track.selected = false; });
+      pick.enabled = true;
+      pick.selected = true;
+      return true;
+    } catch (e) { return false; }
   }
 
   /**
@@ -1743,7 +1715,7 @@
     (audios || []).forEach(function (audio, index) {
       if (voiceKey(audio) === selectedKey) selected = index;
     });
-    if (selected > 0 && (files || []).some(function (file) {
+    if (selected >= 0 && (Number(audios[selected].index) || selected + 1) > 1 && (files || []).some(function (file) {
       return !!(file.urls && file.urls.hls);
     })) return 'hls';
     return format;
@@ -2554,8 +2526,12 @@
         currentVoiceLabel = '';
       } else {
         pendingVoice = (voiceIdx >= 0)
-          ? { idx: voiceIdx, label: pickedLabel, key: (choice && choice.voice_key) || '' }
+          ? { idx: voiceIdx, index: Number(audios[voiceIdx].index) || voiceIdx + 1,
+              lang: audios[voiceIdx].lang, count: audios.length, label: pickedLabel,
+              key: (choice && choice.voice_key) || '' }
           : null;
+
+        play._kpVoice = pendingVoice;
 
         // Keep the current-voice label fresh for the DOM override of
         // .player-panel__next-episode-name (see setupNextEpisodeLabelOverride).
@@ -2607,16 +2583,8 @@
             play.voiceovers = vovers;
             play.translate = pickedLabel;
           } else {
-            // Proxy unreachable (or no audios): fall back to single-entry
-            // (legacy behaviour from v1.0.28). Voice picker shows just the
-            // active voice as a static label, switching is via filter only.
-            play.voiceovers = [{
-              name:    pickedLabel,
-              url:     stream.url,
-              index:   voiceIdx,
-              'default': true
-            }];
-            play.translate = pickedLabel;
+            // Let Lampa display its actual stream tracks and use their setters.
+            // A synthetic single voiceover only changes the label, not the sound.
           }
         }
       }
@@ -4125,8 +4093,7 @@
           Lampa.Player.listener.follow(evt, function (e) { logEvt('Player', { type: evt }); });
         });
         if (!KP_BARE_MODE) {
-          // DOM injection for next-episode-name override
-          Lampa.Player.listener.follow('start',   function () { setupNextEpisodeLabelOverride(); });
+          // Actual audio labels are owned by Lampa's player, not the source filter.
           Lampa.Player.listener.follow('destroy', function () { cleanupNextEpisodeLabelOverride(); });
         }
         // After the player closes, repaint chips on visible cards so episodes
@@ -4190,21 +4157,18 @@
         Lampa.Player.listener.follow('destroy', function () { avplayDumped = false; });
 
         if (!KP_BARE_MODE) {
-          // Voice track switching — fired when audio backend has read tracks
-          // and the stream is ready. We try canplay first, then fall back to
-          // tracks event (hls.js fires it after loading), whichever comes first.
           var voiceApplied = false;
-          function tryApplyPendingVoice(source) {
-            if (voiceApplied || !pendingVoice || pendingVoice.idx < 0) return;
-            Logger.debug('voice', 'apply via ' + source, pendingVoice);
-            if (applyVoiceTrack(pendingVoice.idx)) {
-              voiceApplied = true;
+          Lampa.Player.listener.follow('start', function (play) {
+            pendingVoice = play && play._kpVoice || null;
+            voiceApplied = false;
+          });
+          Lampa.PlayerVideo.listener.follow('tracks', function (event) {
+            if (voiceApplied || !pendingVoice) return;
+            voiceApplied = applyVoiceTrack(event && event.tracks);
+            if (!voiceApplied) {
+              Lampa.Noty.show('Выбранную озвучку не удалось сопоставить. Выберите дорожку в меню проигрывателя.');
             }
-          }
-          Lampa.PlayerVideo.listener.follow('canplay',    function () { tryApplyPendingVoice('canplay'); });
-          Lampa.PlayerVideo.listener.follow('loadeddata', function () { tryApplyPendingVoice('loadeddata'); });
-          Lampa.PlayerVideo.listener.follow('tracks',     function () { tryApplyPendingVoice('tracks'); });
-          // reset the one-shot guard when player is destroyed so next launch can apply again
+          });
           Lampa.Player.listener.follow('destroy', function () {
             voiceApplied = false;
             pendingVoice = null;

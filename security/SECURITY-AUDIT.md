@@ -178,3 +178,9 @@ button visibility through ancestor styles, duplicate events, the Japanese menu
 entry and its dispatch to voice index 1. The previous event path fails to mount;
 removing restored voice entries makes the test fail. No account/network is used.
 A specific Bleach API response and TV audio output remain unverified.
+
+## Personal build 4: real playback audio selection
+
+Reproduced requested-Japanese/default-Russian playback with the delivered Lampa hls.js track wrapper: previous plugin could set a Japanese UI label but could not access Lampa's private hls instance. The regression now builds real plugin play elements, starts a clicked episode after building other playlist entries, and observes the actual Lampa enabled setter changing the backend track. Removed synthetic single-entry voiceovers and the next-episode label override for direct playback. Match tracks by API track number in the rendition name, unique language, or complete unlabelled list; never use API array position as a rendition ID. Player start restores each episode's own selection. Missing or ambiguous tracks keep the actual player list and show a local notice. No proxy or remote logging was reintroduced.
+
+Local tests do not verify Samsung hardware, the user's Bleach API response, codec decoding, or audibility.

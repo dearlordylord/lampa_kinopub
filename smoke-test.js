@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const code = fs.readFileSync(process.env.KP_TEST_PLUGIN || path.join(__dirname, 'docs', 'kp.js'), 'utf8').replace('  startPlugin();', '  window.__reviewVoiceChips = voiceChipsHtml; window.__reviewVoiceVisible = isVoiceVisible; window.__reviewVoiceLabel = voiceLabel; window.__reviewFormatForVoice = formatForVoice; window.__reviewVoiceKey = voiceKey;\n  startPlugin();');
+const code = fs.readFileSync(process.env.KP_TEST_PLUGIN || path.join(__dirname, 'docs', 'kp.js'), 'utf8').replace('    /* ---------- public API expected by component ---------- */', '    window.__reviewBuildPlay = toPlayElement; window.__reviewSourceChoice = choice;').replace('  startPlugin();', '  window.__reviewVoiceChips = voiceChipsHtml; window.__reviewCreateSource = kpapi; window.__reviewVoiceVisible = isVoiceVisible; window.__reviewVoiceLabel = voiceLabel; window.__reviewFormatForVoice = formatForVoice; window.__reviewVoiceKey = voiceKey;\n  startPlugin();');
 
 // jQuery-ish sham — the plugin only uses $('<...>'), .on, .find, .append, .text,
 // and as a function that returns a thenable-free wrapper.
@@ -37,6 +37,9 @@ function makeJq() {
 
 const $ = makeJq();
 
+const videoEvents = {}; const playerEvents = {};
+function events(store) { return { follow(name, cb) { (store[name] ||= []).push(cb); } }; }
+function emit(store, name, event) { (store[name] || []).forEach(cb => cb(event)); }
 let kpComponentRegistered = null;
 let manifestSet = null;
 let langKeys = [];
@@ -103,7 +106,8 @@ const Lampa = {
   Background: { immediately: () => {} },
   Template: { add: () => {}, get: () => $('<div></div>') },
   TMDB: { key: () => 'k', api: (u) => u, image: () => '' },
-  Player: { play: () => {}, playlist: () => {}, runas: () => {}, callback: () => {} },
+  PlayerVideo: { listener: events(videoEvents) },
+  Player: { listener: events(playerEvents), play: () => {}, playlist: () => {}, runas: () => {}, callback: () => {} },
   Platform: { is: (n) => n === 'browser', tv: () => false, mouse: () => true, screen: () => 'mobile', any: () => true },
   Scroll: function () { this.render = () => $(); this.body = () => $(); this.minus = () => {}; this.append = () => {}; this.update = () => {}; this.clear = () => {}; this.destroy = () => {}; },
   Explorer: function () { this.render = () => $(); this.appendFiles = () => {}; this.appendHead = () => {}; this.destroy = () => {}; },
@@ -157,7 +161,37 @@ const english = { index: 3, lang: 'eng', type: { short_title: '', title: 'Origin
 const russian = { index: 1, lang: 'rus', type: { short_title: 'Dub' } };
 const audioFixture = [russian, japanese];
 const formatFixture = [{ urls: { hls2: 'https://cdn2cdn.com/single.m3u8', hls: 'https://cdn2cdn.com/multi.m3u8' } }];
+// Use the real Lampa hls.js track wrapper: setting enabled calls its private backend.
+const appCode = fs.readFileSync(path.join(__dirname, '../lampa-security-review/app.min.js'), 'utf8');
+const setupMatch = appCode.match(/  function setupAudioTracks\$1\(\) \{[\s\S]*?\n  \}/);
+const hlsBackend = { audioTrack: 0 };
+const realTracks = [{ id: 0, lang: 'rus', name: '01. Russian' }, { id: 1, lang: 'jpn', name: '02. Japanese' }];
+const trackCtx = vm.createContext({ _hls: hlsBackend, audioTracks$1: () => realTracks });
+vm.runInContext(setupMatch[0] + '; setupAudioTracks$1();', trackCtx);
+new sandbox.window.__reviewCreateSource({}, { movie: { title: 'Bleach' } });
+sandbox.window.__reviewSourceChoice.voice_key = sandbox.window.__reviewVoiceKey(japanese);
+const playFixture = { title: 'Bleach', kp: { kind: 'episode', audios: [japanese, russian], files: [{ quality: 720, urls: formatFixture[0].urls }] } };
+const japanesePlay = sandbox.window.__reviewBuildPlay(playFixture);
+sandbox.window.__reviewSourceChoice.voice_key = sandbox.window.__reviewVoiceKey(russian);
+const russianPlay = sandbox.window.__reviewBuildPlay(playFixture);
+// Building the remaining playlist must not overwrite the clicked episode's voice.
+emit(playerEvents, 'start', japanesePlay);
+emit(videoEvents, 'tracks', { tracks: realTracks });
+const japaneseActuallySelected = hlsBackend.audioTrack === 1;
+emit(playerEvents, 'start', russianPlay);
+emit(videoEvents, 'tracks', { tracks: realTracks });
+const nextEpisodeRestoresItsVoice = hlsBackend.audioTrack === 0;
+emit(playerEvents, 'start', japanesePlay);
+hlsBackend.audioTrack = -1;
+emit(videoEvents, 'tracks', { tracks: [realTracks[0]] });
+const missingJapaneseNotReportedSelected = hlsBackend.audioTrack === -1;
 const checks = [
+  ['Play element uses multi-audio stream and carries Japanese metadata', japanesePlay.url === formatFixture[0].urls.hls && japanesePlay._kpVoice.lang === 'jpn' && japanesePlay._kpVoice.index === 2],
+  ['Player receives actual tracks rather than a synthetic Japanese label', !japanesePlay.voiceovers && !japanesePlay.translate],
+  ['Each episode applies its own pending voice on actual player start', nextEpisodeRestoresItsVoice],
+  ['Missing Japanese cannot switch a Russian-only stream', missingJapaneseNotReportedSelected],
+  ['Reordered API audio still chooses multi-audio HLS', sandbox.window.__reviewFormatForVoice('hls2', formatFixture, [japanese, russian], sandbox.window.__reviewVoiceKey(japanese)) === 'hls'],
+  ['Selecting Japanese invokes real Lampa track setter even when API order differs', japaneseActuallySelected],
   ['Selecting Japanese uses available multi-audio HLS instead of HLS2', sandbox.window.__reviewFormatForVoice('hls2', formatFixture, audioFixture, sandbox.window.__reviewVoiceKey(japanese)) === 'hls'],
   ['Default Russian keeps stable HLS2', sandbox.window.__reviewFormatForVoice('hls2', formatFixture, audioFixture, sandbox.window.__reviewVoiceKey(russian)) === 'hls2'],
   ['Explicit HLS4 preference is preserved', sandbox.window.__reviewFormatForVoice('hls4', formatFixture, audioFixture, sandbox.window.__reviewVoiceKey(japanese)) === 'hls4'],
