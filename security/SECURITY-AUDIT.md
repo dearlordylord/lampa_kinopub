@@ -1,5 +1,9 @@
 # Проверка KinoPub-плагина и Lampa — 2026-10-23
 
+> Это первоначальный аудит upstream. Затем подготовлена отдельная изменённая
+> [сборка Lampa](https://github.com/dearlordylord/lampa); актуальные исправления
+> и проверки — [PERSONAL-SECURITY.md](https://github.com/dearlordylord/lampa/blob/main/PERSONAL-SECURITY.md).
+
 ## Вывод
 
 **Исходную связку с аккаунтом пока не использовать.** В проверенных путях кода не
