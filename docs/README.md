@@ -1,3 +1,8 @@
+> Это изменённый личный форк. Актуальные ограничения и рекомендации:
+> [README](../README.md) и [security review](../security/REVIEW.md).
+> Удалённые логи и сторонние прокси в нём отключены; описание upstream ниже
+> сохранено как справка и не является инструкцией запуска форка.
+
 # Lampa kinopub plugin
 
 Плагин-источник видео [kinopub](https://kino.pub) для медиацентра [Lampa](https://github.com/yumata/lampa). Ориентирован на Samsung Tizen (Tizen TV), работает также на webOS, Android и в браузере.
@@ -7,7 +12,7 @@
 Прямая ссылка плагина:
 
 ```
-https://mainsync-afk.github.io/lampa_kinopub/kp.js
+https://dearlordylord.github.io/lampa_kinopub/kp.js
 ```
 
 В Lampa: Настройки → Расширения → Добавить плагин → вставить URL → Сохранить.

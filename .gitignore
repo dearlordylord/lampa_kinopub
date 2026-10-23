@@ -18,3 +18,11 @@ yarn-error.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Private state and diagnostic exports
+logs/
+data/
+.env
+.env.*
+*.apk
+kp_kodi.zip

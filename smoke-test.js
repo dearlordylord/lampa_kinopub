@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const code = fs.readFileSync(path.join(__dirname, 'github', 'kp.js'), 'utf8');
+const code = fs.readFileSync(process.env.KP_TEST_PLUGIN || path.join(__dirname, 'docs', 'kp.js'), 'utf8').replace('  startPlugin();', '  window.__reviewVoiceChips = voiceChipsHtml;\n  startPlugin();');
 
 // jQuery-ish sham — the plugin only uses $('<...>'), .on, .find, .append, .text,
 // and as a function that returns a thenable-free wrapper.
@@ -42,7 +42,10 @@ let manifestSet = null;
 let langKeys = [];
 let listenerFollow = null;
 let settingsAdded = [];
-let storage = {};
+let storage = { kp_token: 'review-token', kp_log_url: 'https://untrusted.example', kp_proxy: 'https://untrusted.example' };
+const apiRequests = [];
+const xhrRequests = [];
+const syncKeys = [];
 
 const Lampa = {
   Manifest: {
@@ -54,12 +57,16 @@ const Lampa = {
     get: (k, d) => (k in storage ? storage[k] : d),
     set: (k, v) => { storage[k] = v; },
     cache: (k, _life, def) => { if (!(k in storage)) storage[k] = def; return storage[k]; },
-    sync: () => {},
+    sync: (key) => { syncKeys.push(key); },
     field: (k) => storage[k],
     remove: () => {}
   },
   Reguest: function () {
-    this.silent = function () {};
+    this.silent = function (url, ok, err, body, params) {
+      apiRequests.push({ url, body, headers: params && params.headers });
+      if (url.endsWith('/v1/user')) ok({ user: { username: 'review-user' } });
+      else ok({});
+    };
     this.quiet = function () {};
     this.native = function () {};
     this.timeout = function () {};
@@ -80,7 +87,7 @@ const Lampa = {
     add: (obj) => { langKeys = langKeys.concat(Object.keys(obj)); },
     translate: (k) => k
   },
-  Listener: { follow: (name, cb) => { listenerFollow = { name, cb }; } },
+  Listener: { follow: (name, cb) => { if (name === 'full') listenerFollow = { name, cb }; } },
   Manifest_set: null,
   Component: {
     add: (name, cls) => { if (name === 'online_kp') kpComponentRegistered = cls; },
@@ -120,13 +127,13 @@ const sandbox = {
   window: { addEventListener: () => {} },
   document: {},
   navigator: { userAgent: 'node-smoke' },
-  console,
+  console: { ...console },
   setTimeout, clearTimeout, setInterval, clearInterval,
   $, Lampa, Navigator,
   XMLHttpRequest: function () {
-    this.open = () => {};
+    this.open = (method, url) => { xhrRequests.push({ method, url }); };
     this.setRequestHeader = () => {};
-    this.send = () => {};
+    this.send = () => { this.status = 200; this.responseText = '{}'; if (this.onload) this.onload(); };
     this.abort = () => {};
   }
 };
@@ -144,7 +151,13 @@ try {
   ok = false;
 }
 
+const maliciousVoiceHtml = sandbox.window.__reviewVoiceChips([{ lang: 'rus', type: { short_title: '<img src=x onerror=alert(1)>', title: 'Dub' } }], '', '', false);
 const checks = [
+  ['voice labels cannot inject HTML tags', maliciousVoiceHtml.includes('&lt;img') && !maliciousVoiceHtml.includes('<img')],
+  ['no background author proxy or remote logging requests', xhrRequests.length === 0],
+  ['no credential-bearing API calls via a saved third-party proxy', apiRequests.length > 0 && apiRequests.every(r => r.url.startsWith('https://api.service-kp.com/'))],
+  ['Bearer token only in header', apiRequests.every(r => !r.url.includes('review-token') && r.headers.Authorization === 'Bearer review-token')],
+  ['no CUB voice sync registration', !syncKeys.includes('online_choice_kpapi')],
   ['manifest set', !!manifestSet],
   ['manifest type=video', manifestSet && manifestSet.type === 'video'],
   ['manifest component=online_kp', manifestSet && manifestSet.component === 'online_kp'],
@@ -157,12 +170,12 @@ const checks = [
   ['listener follow=full', listenerFollow && listenerFollow.name === 'full'],
   ['listener has cb', listenerFollow && typeof listenerFollow.cb === 'function'],
   ['settings component added', settingsAdded.some((s) => s.kind === 'component')],
-  ['settings has log url', settingsAdded.some((s) => s.kind === 'param' && s.name === 'kp_log_url')],
+  ['remote logging control removed', !settingsAdded.some((s) => s.kind === 'param' && s.name === 'kp_log_url')],
   ['settings has max quality', settingsAdded.some((s) => s.kind === 'param' && s.name === 'kp_max_quality')],
   ['settings has format', settingsAdded.some((s) => s.kind === 'param' && s.name === 'kp_format')],
   ['settings has login', settingsAdded.some((s) => s.kind === 'param' && s.name === 'kp_action_login')],
   ['default max_quality stored', storage['kp_max_quality'] === '1080'],
-  ['default format stored', storage['kp_format'] === 'http']
+  ['default format stored', storage['kp_format'] === 'auto']
 ];
 
 let pass = 0, fail = 0;
@@ -199,6 +212,8 @@ if (kpComponentRegistered) {
     fail++;
   }
 }
+
+if (xhrRequests.length !== 0) { console.error('FAIL remote requests after card open'); fail++; }
 
 console.log(`\n=== ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

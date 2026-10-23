@@ -8,8 +8,7 @@
  * Targets: Samsung Tizen (primary), webOS, Android, browser.
  * Plays through Lampa's built-in HTML5 player and Tizen AVPlayer.
  *
- * Logs are streamed to a remote log-server (see log-server/server.js)
- * when its URL is set in plugin settings.
+ * Privacy fork: remote logging, author proxy and remote voice sync are disabled.
  */
 (function () {
   'use strict';
@@ -60,7 +59,7 @@
   // Public proxy on Eugene's VPS (mirror of lampac architecture):
   //   GET https://kinopub.fastcdn.pics/manifest-proxy?master=<encoded>&voice=<N>
   // Source: github.com/mainsync-afk/lampa_kinopub /proxy-server/
-  var KP_PROXY_URL = 'https://kinopub.fastcdn.pics';
+  var KP_PROXY_URL = ''; // Privacy fork: never use the author's VPS.
 
   // Set by checkProxyAvailability() at startup; gates voice switching.
   // null  — not yet checked
@@ -100,168 +99,12 @@
    *  - batches records and POSTs to remote log-server            *
    * ============================================================ */
 
+  // Privacy fork: disable diagnostics, remote logs and global console hooks.
+  // Logs previously included activation codes and signed playback URLs.
   var Logger = (function () {
-    var sessionId = (Lampa.Utils && Lampa.Utils.uid) ? Lampa.Utils.uid(8)
-                                                     : Math.random().toString(36).slice(2, 10);
-    var queue       = [];
-    var maxQueue    = 500;
-    var endpoint    = '';
-    var flushing    = false;
-    var flushTimer  = null;
-    var FLUSH_DELAY = 250; // fast flush so we don't miss player error bursts
-
-    function readEndpoint() {
-      var v = Lampa.Storage.get(KEY_LOG_URL, '') || '';
-      endpoint = String(v).replace(/\/+$/, '');
-    }
-
-    function platform() {
-      try {
-        if (Lampa.Platform.is('tizen'))   return 'tizen';
-        if (Lampa.Platform.is('webos'))   return 'webos';
-        if (Lampa.Platform.is('android')) return 'android';
-        if (Lampa.Platform.is('apple_tv')) return 'apple_tv';
-        if (Lampa.Platform.is('apple'))   return 'apple';
-      } catch (e) {}
-      return 'browser';
-    }
-
-    function safeData(v) {
-      if (v === undefined) return undefined;
-      try { return JSON.parse(JSON.stringify(v)); }
-      catch (e) { try { return String(v); } catch (e2) { return null; } }
-    }
-
-    function consolePrint(level, tag, message, data) {
-      try {
-        var prefix = '[KP:' + tag + ']';
-        var args   = data === undefined ? [prefix, message] : [prefix, message, data];
-        if      (level === 'error' && console.error) console.error.apply(console, args);
-        else if (level === 'warn'  && console.warn)  console.warn.apply(console, args);
-        else                                          console.log.apply(console, args);
-      } catch (e) { /* ignore */ }
-    }
-
-    function add(level, tag, message, data) {
-      var rec = {
-        session: sessionId,
-        plat:    platform(),
-        level:   level,
-        ts:      Date.now(),
-        tag:     tag,
-        message: message
-      };
-      var safe = safeData(data);
-      if (safe !== undefined) rec.data = safe;
-
-      consolePrint(level, tag, message, data);
-
-      if (!endpoint) return;
-      queue.push(rec);
-      if (queue.length > maxQueue) queue.splice(0, queue.length - maxQueue);
-      schedule();
-    }
-
-    function schedule() {
-      if (flushTimer || flushing || !endpoint) return;
-      flushTimer = setTimeout(flush, FLUSH_DELAY);
-    }
-
-    function flush() {
-      flushTimer = null;
-      if (flushing || !endpoint || queue.length === 0) return;
-      flushing = true;
-
-      var batch = queue.slice();
-      try {
-        var xhr = new XMLHttpRequest();
-        xhr.open('POST', endpoint + '/logs', true);
-        xhr.setRequestHeader('Content-Type', 'application/json');
-        xhr.timeout = 6000;
-        xhr.onreadystatechange = function () {
-          if (xhr.readyState !== 4) return;
-          flushing = false;
-          if (xhr.status >= 200 && xhr.status < 300) {
-            queue.splice(0, batch.length);
-          }
-          if (queue.length > 0 && endpoint) schedule();
-        };
-        xhr.ontimeout = function () { flushing = false; };
-        xhr.onerror   = function () { flushing = false; };
-        xhr.send(JSON.stringify(batch));
-      } catch (e) {
-        flushing = false;
-      }
-    }
-
-    readEndpoint();
-
-    return {
-      debug:   function (tag, msg, data) { add('debug', tag, msg, data); },
-      info:    function (tag, msg, data) { add('info',  tag, msg, data); },
-      warn:    function (tag, msg, data) { add('warn',  tag, msg, data); },
-      error:   function (tag, msg, data) { add('error', tag, msg, data); },
-      reload:  readEndpoint,
-      session: function () { return sessionId; },
-      flush:   flush
-    };
-  })();
-
-  // global error capture from anywhere in the plugin
-  window.addEventListener('error', function (ev) {
-    if (!ev || !ev.message) return;
-    if (String(ev.message).indexOf('KP') === -1 &&
-        String(ev.filename || '').indexOf('kp.js') === -1) return;
-    Logger.error('window', ev.message, {
-      file: ev.filename, line: ev.lineno, col: ev.colno
-    });
-  });
-
-  // hook console.error/warn/log so HLS / video / network errors that bubble
-  // through hls.js or Tizen AVPlayer get forwarded to our remote log.
-  (function () {
-    var origError = console.error;
-    var origWarn  = console.warn;
-    var origLog   = console.log;
-    var KEEP = /hls|video|m3u8|cdn|player|tizen|avplay|networkerror|levelloaderror|fragloaderror|manifestloaderror|mediaerror|bufferappenderror|audiocodec|videocodec|fmp4|fragmented|track|src|fetch|xhr|ajax|cors|origin|kinopub|kp/i;
-    function format(args) {
-      try {
-        return Array.prototype.slice.call(args).map(function (a) {
-          if (a == null) return String(a);
-          if (typeof a === 'string') return a;
-          if (a instanceof Error) return a.name + ': ' + a.message;
-          try { return JSON.stringify(a); } catch (e) { return String(a); }
-        }).join(' ');
-      } catch (e) { return ''; }
-    }
-    // ALL console.error reports (no filter — errors are rare, want every one)
-    console.error = function () {
-      try {
-        var m = format(arguments);
-        // skip our own [KP:...] log echoes to avoid feedback
-        if (m.indexOf('[KP:') !== 0) Logger.error('console', m.slice(0, 1000));
-      } catch (e) {}
-      return origError.apply(console, arguments);
-    };
-    console.warn = function () {
-      try {
-        var m = format(arguments);
-        if (m.indexOf('[KP:') !== 0 && KEEP.test(m)) {
-          Logger.warn('console', m.slice(0, 1000));
-        }
-      } catch (e) {}
-      return origWarn.apply(console, arguments);
-    };
-    // log filter is strict — too noisy otherwise
-    console.log = function () {
-      try {
-        var m = format(arguments);
-        if (m.indexOf('[KP:') !== 0 && KEEP.test(m)) {
-          Logger.debug('console', m.slice(0, 1000));
-        }
-      } catch (e) {}
-      return origLog.apply(console, arguments);
-    };
+    function noop() {}
+    return { debug: noop, info: noop, warn: noop, error: noop,
+      reload: noop, flush: noop, session: function () { return ''; } };
   })();
 
   Logger.info('boot', 'kp.js v' + PLUGIN_VERSION + ' starting', {
@@ -289,10 +132,8 @@
     }
 
     function proxify(url) {
-      var p = (Lampa.Storage.get(KEY_PROXY, '') || '').replace(/\/+$/, '');
-      if (!p) return url;
-      // append URL — most CORS-proxies accept this format (cors.byskaz.ru/<full_url>)
-      return p + '/' + url;
+      // Never route OAuth credentials or Bearer tokens through a stored third-party proxy.
+      return url;
     }
 
     function commonForm(extra) {
@@ -797,6 +638,7 @@
    * behaviour and can re-enter after kpProxyAvailable flips to true.
    */
   function checkProxyAvailability(attempt) {
+    if (!KP_PROXY_URL) { kpProxyAvailable = false; return; }
     attempt = attempt || 1;
     var url = KP_PROXY_URL.replace(/\/+$/, '') + '/health';
     try {
@@ -852,7 +694,7 @@
    * ──────────────────────────────────────────────────────────────────── */
 
   function kpVoiceSyncReady() {
-    return kpProxyAvailable === true && !!kpUserId;
+    return false; // Privacy fork: username-based remote sync is disabled.
   }
 
   function kpVoiceSyncBaseUrl() {
@@ -1738,6 +1580,11 @@
     return d + '.' + mm + '.' + y;
   }
 
+  function escapeHtml(value) {
+    return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
   function voiceChipsHtml(audios, activeKey, watchedKey, hasProgress) {
     if (!audios || !audios.length) return '';
 
@@ -1824,7 +1671,7 @@
       var classes = ['kp-voice-chip'];
       var ind = chipIndicatorClass(entry);
       if (ind) classes.push(ind);
-      return '<span class="' + classes.join(' ') + '">' + voiceChipText(entry.audio) + '</span>';
+      return '<span class="' + classes.join(' ') + '">' + escapeHtml(voiceChipText(entry.audio)) + '</span>';
     }).join('');
   }
 
@@ -3301,7 +3148,7 @@
       // full chosen text directly into the inner div of the filter button.
       try {
         var full = select.join(' | ');
-        filter.render().find('.filter--filter > div').html(full || '').toggleClass('hide', !full);
+        filter.render().find('.filter--filter > div').text(full || '').toggleClass('hide', !full);
       } catch (e) {}
     };
 
@@ -3932,13 +3779,6 @@
 
     Lampa.SettingsApi.addParam({
       component: 'kp',
-      param: { name: KEY_LOG_URL, type: 'input', values: '', "default": '' },
-      field: { name: Lampa.Lang.translate('kp_set_log_url'),  description: Lampa.Lang.translate('kp_set_log_url_descr') },
-      onChange: function () { Logger.reload(); }
-    });
-
-    Lampa.SettingsApi.addParam({
-      component: 'kp',
       param: {
         name: KEY_MAX_QUAL, type: 'select',
         values: { '480': '480p', '720': '720p', '1080': '1080p', '1440': '1440p', '2160': '2160p' },
@@ -3960,12 +3800,6 @@
         "default": 'auto'
       },
       field: { name: Lampa.Lang.translate('kp_set_format'), description: Lampa.Lang.translate('kp_set_format_descr') }
-    });
-
-    Lampa.SettingsApi.addParam({
-      component: 'kp',
-      param: { name: KEY_PROXY, type: 'input', values: '', "default": '' },
-      field: { name: Lampa.Lang.translate('kp_set_proxy'), description: Lampa.Lang.translate('kp_set_proxy_descr') }
     });
 
     Lampa.SettingsApi.addParam({
@@ -4279,9 +4113,7 @@
       Logger.info('auth', 'no token at startup');
     }
 
-    if (Lampa.Manifest.app_digital >= 177) {
-      Lampa.Storage.sync('online_choice_' + BALANSER, 'object_object');
-    }
+    // Privacy fork: keep KinoPub choices local; do not register CUB synchronization.
 
     // Subscribe to GLOBAL Lampa.Listener channels (only app/activity/controller
     // actually fire here — `player` and `video` channels DON'T exist globally).
