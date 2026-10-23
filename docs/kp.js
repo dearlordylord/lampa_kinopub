@@ -82,7 +82,7 @@
   var CLIENT_SECRET   = 'cgg3gtifu46urtfp2zp1nqtba0k2ezxh';
 
   var API_HOST        = 'https://api.service-kp.com';
-  var DEVICE_PAGE     = 'https://kino.pub/device';
+  var DEVICE_PAGE     = 'https://kino.watch/device';
 
   // Storage keys
   var KEY_TOKEN       = 'kp_token';
@@ -3826,19 +3826,7 @@
       onChange: function () { openAuthModal(); }
     });
 
-    Lampa.SettingsApi.addParam({
-      component: 'kp',
-      param: { name: 'kp_action_region', type: 'trigger', "default": false },
-      field: { name: Lampa.Lang.translate('kp_set_region'), description: Lampa.Lang.translate('kp_set_region_descr') },
-      onChange: function () {
-        Lampa.Noty.show(Lampa.Lang.translate('kp_region_running'));
-        setupRegion(true, function (ok, name) {
-          Lampa.Noty.show(ok
-            ? Lampa.Lang.translate('kp_region_done') + ': ' + name
-            : Lampa.Lang.translate('kp_region_fail'));
-        });
-      }
-    });
+
   }
 
   /* ============================================================ *
@@ -3891,14 +3879,14 @@
         ua: 'Авторизація kinopub'
       },
       kp_auth_text: {
-        ru: 'Откройте на телефоне или ПК страницу kino.pub/device и введите код:',
+        ru: 'Откройте на телефоне или ПК страницу активации устройства на KinoPub и введите код:',
         en: 'Open kino.pub/device on your phone or PC and enter the code:',
         ua: 'Відкрийте на телефоні чи ПК сторінку kino.pub/device та введіть код:'
       },
       kp_auth_url: {
-        ru: 'https://kino.pub/device',
-        en: 'https://kino.pub/device',
-        ua: 'https://kino.pub/device'
+        ru: 'https://kino.watch/device',
+        en: 'https://kino.watch/device',
+        ua: 'https://kino.watch/device'
       },
       kp_auth_wait: {
         ru: 'Получаем код',
@@ -3951,14 +3939,14 @@
         ua: 'Формат потоку'
       },
       kp_set_format_descr: {
-        ru: 'Авто = подбирать формат под текущий плеер: HLS4 для нативного Tizen-плеера (4K + полная поддержка озвучек), HLS2 для встроенного плеера Lampa (стабильно, без зависаний на fMP4). HLS4/HLS2/HLS — принудительно.',
-        en: 'Auto = pick format by current player: HLS4 for Tizen native player (4K + full audio tracks), HLS2 for Lampa built-in (stable, no fMP4 hangs). HLS4/HLS2/HLS = forced.',
-        ua: 'Авто = підбирати формат під плеєр: HLS4 для Tizen, HLS2 для вбудованого Lampa.'
+        ru: 'Авто использует HLS2. Для первой проверки оставьте 1080p. Если нужна другая озвучка, попробуйте HLS; HLS4 может зависать на Samsung.',
+        en: 'Auto uses HLS2. Start at 1080p. Try HLS for other audio tracks; HLS4 can hang on Samsung.',
+        ua: 'Авто використовує HLS2. Почніть із 1080p; HLS4 може зависати на Samsung.'
       },
       kp_set_format_auto: {
-        ru: 'Авто (по плееру)',
-        en: 'Auto (by player)',
-        ua: 'Авто (за плеєром)'
+        ru: 'Авто (HLS2)',
+        en: 'Auto (HLS2)',
+        ua: 'Авто (HLS2)'
       },
       kp_set_proxy: {
         ru: 'CORS-прокси',
@@ -4011,7 +3999,7 @@
         ua: 'Авторизуватися'
       },
       kp_set_login_descr: {
-        ru: 'Открыть окно с кодом для kino.pub/device',
+        ru: 'Показать код для страницы «Активация устройства» в вашем KinoPub',
         en: 'Open the kino.pub/device code dialog',
         ua: 'Відкрити вікно з кодом для kino.pub/device'
       },
