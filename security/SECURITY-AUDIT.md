@@ -163,3 +163,18 @@ malware. Не все включены на каждом запуске. README �
   реальные credentials не вводились, серверы не разворачивались.
 - Полного антивирусного/динамического анализа всех архивов и цепочки сборки нет.
   Плеер, API и Samsung QN55LS03BAFXZC вживую не проверены.
+
+## UI follow-up: personal build 3
+
+A real-DOM fixture found issues not covered by the original boot mocks: current
+Lampa emits `full.body` / `full.link`, while the plugin accessed the obsolete
+`full.object.activity`; the old torrent anchor also belongs to a hidden source
+container. The plugin now mounts one visible KinoPub button in the primary row.
+The author had removed pre-play voice choices in favor of proxy-based switching;
+those choices and their dispatch are restored, with audio entries before seasons.
+
+`security/card-button.cjs` uses jsdom 26.1.0 and the vendored jQuery. It checks
+button visibility through ancestor styles, duplicate events, the Japanese menu
+entry and its dispatch to voice index 1. The previous event path fails to mount;
+removing restored voice entries makes the test fail. No account/network is used.
+A specific Bleach API response and TV audio output remain unverified.

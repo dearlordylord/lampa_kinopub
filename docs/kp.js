@@ -22,7 +22,7 @@
    *  CONSTANTS                                                   *
    * ============================================================ */
 
-  var PLUGIN_VERSION  = '1.0.73-personal.2';
+  var PLUGIN_VERSION  = '1.0.73-personal.3';
   // Public manifest-proxy URL — set near KP_PROXY_URL declaration below.
   var COMPONENT_NAME  = 'online_kp';
   var BALANSER        = 'kpapi';
@@ -2883,6 +2883,8 @@
           if (a.reset) {
             if (extended) source.reset();
             else self.start();
+          } else if (a.voice_pick) {
+            source.filter(type, { stype: 'voice' }, { index: a.voice_idx });
           } else if (a.season_pick) {
             // v1.0.42: flat-list season entry (no submenu) — Lampa Filter
             // calls onSelect with just (type, a) and undefined b, so we
@@ -3084,12 +3086,13 @@
     this.filter = function (filter_items, choice) {
       var self = this;
       var select = [];
-      // v1.0.42: removed "Сбросить фильтр" (was first entry).
-      // v1.0.42: removed voice row from sidebar — voice selection happens
-      // in player tracks list (soft-swap), not in the season sidebar.
-      // v1.0.42: seasons flattened to one entry per season (no dropdown);
-      // each is directly clickable; current season highlighted via selected.
+      // Restore explicit pre-play audio selection; this build has no proxy
+      // providing the upstream in-player voice-switch menu.
       this.saveChoice(choice);
+      (filter_items.voice || []).forEach(function (name, i) {
+        select.push({ title: 'Озвучка: ' + name, voice_pick: true,
+          voice_idx: i, selected: choice.voice === i });
+      });
       if (filter_items.season && filter_items.season.length) {
         var need = self.getChoice();
         filter_items.season.forEach(function (name, i) {
@@ -4045,14 +4048,18 @@
           Lampa.Component.add(COMPONENT_NAME, component);
           launchActivity(e.data.movie);
         });
-        var holder = e.object.activity.render();
-        var anchor = holder.find('.view--torrent');
-        if (anchor.length) anchor.after(btn);
-        else {
-          var buttons = holder.find('.full-start-new__buttons, .full-start__buttons').first();
-          if (buttons.length) buttons.append(btn);
-          else holder.find('.full-start__button').first().after(btn);
-        }
+        // Current Lampa supplies the rendered card as body; object is
+        // activity data, not the old component instance.
+        var holder = e.body || (e.link && e.link.activity && e.link.activity.render()) ||
+          (e.object && e.object.activity && e.object.activity.render());
+        if (!holder) return;
+        holder = $(holder);
+        if (holder.find('.view--kinopub-personal').length) return;
+        btn.addClass('view--kinopub-personal');
+        // Keep our sole source in the visible row, not .buttons--container.
+        var buttons = holder.find('.full-start-new__buttons, .full-start__buttons').first();
+        if (buttons.length) buttons.prepend(btn);
+        else holder.find('.full-start__button').first().before(btn);
       } catch (err) {
         Logger.error('button', 'mount failed', String(err));
       }
