@@ -184,3 +184,7 @@ A specific Bleach API response and TV audio output remain unverified.
 Reproduced requested-Japanese/default-Russian playback with the delivered Lampa hls.js track wrapper: previous plugin could set a Japanese UI label but could not access Lampa's private hls instance. The regression now builds real plugin play elements, starts a clicked episode after building other playlist entries, and observes the actual Lampa enabled setter changing the backend track. Removed synthetic single-entry voiceovers and the next-episode label override for direct playback. Match tracks by API track number in the rendition name, unique language, or complete unlabelled list; never use API array position as a rendition ID. Player start restores each episode's own selection. Missing or ambiguous tracks keep the actual player list and show a local notice. No proxy or remote logging was reintroduced.
 
 Local tests do not verify Samsung hardware, the user's Bleach API response, codec decoding, or audibility.
+
+## Personal build 5: opt-in diagnostic attachment
+
+The optional KpAudioDiagnostics hook attaches only our bundled, read-only telemetry module. Player metadata now includes the selected audio codec and channel count so diagnostics do not need account data or source URLs. No arbitrary JavaScript execution, author server, global console logger, or remote control was added. The module and exact temporary upload destination are pinned and reviewed in the Lampa repository.

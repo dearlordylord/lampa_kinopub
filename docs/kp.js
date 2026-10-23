@@ -22,7 +22,7 @@
    *  CONSTANTS                                                   *
    * ============================================================ */
 
-  var PLUGIN_VERSION  = '1.0.73-personal.4';
+  var PLUGIN_VERSION  = '1.0.73-personal.5';
   // Public manifest-proxy URL — set near KP_PROXY_URL declaration below.
   var COMPONENT_NAME  = 'online_kp';
   var BALANSER        = 'kpapi';
@@ -2527,7 +2527,7 @@
       } else {
         pendingVoice = (voiceIdx >= 0)
           ? { idx: voiceIdx, index: Number(audios[voiceIdx].index) || voiceIdx + 1,
-              lang: audios[voiceIdx].lang, count: audios.length, label: pickedLabel,
+              lang: audios[voiceIdx].lang, codec: audioCodec(audios[voiceIdx]), channels: audios[voiceIdx].channels, count: audios.length, label: pickedLabel,
               key: (choice && choice.voice_key) || '' }
           : null;
 
@@ -4219,6 +4219,7 @@
     // plugin transparently falls back to v1.0.28 HLS2-only mode.
     checkProxyAvailability();
 
+    if (window.KpAudioDiagnostics) window.KpAudioDiagnostics.attach(Lampa);
     Logger.info('boot', 'kp.js initialized');
   }
 
