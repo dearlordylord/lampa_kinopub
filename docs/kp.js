@@ -22,7 +22,7 @@
    *  CONSTANTS                                                   *
    * ============================================================ */
 
-  var PLUGIN_VERSION  = '1.0.73-personal.6';
+  var PLUGIN_VERSION  = '1.0.73-personal.7';
   // Public manifest-proxy URL — set near KP_PROXY_URL declaration below.
   var COMPONENT_NAME  = 'online_kp';
   var BALANSER        = 'kpapi';
@@ -1721,7 +1721,18 @@
     return format;
   }
 
-  function pickStream(files, format, target, allowDefaultAudio) {
+  // Legacy HLS is one audio per master URL. Select it in the pathname,
+  // preserving the signed path prefix, query and fragment verbatim.
+  function hlsAudioUrl(url, audioIndex) {
+    var index = Number(audioIndex);
+    if (typeof url !== 'string' || !isFinite(index) || index < 1 || index > 128 || Math.floor(index) !== index) return url;
+    var suffixAt = url.search(/[?#]/);
+    var path = suffixAt < 0 ? url : url.slice(0, suffixAt);
+    var suffix = suffixAt < 0 ? '' : url.slice(suffixAt);
+    return path.replace(/(^|\/)master-v1a\d+(?=\.m3u8$|$)/, '$1master-v1a' + index) + suffix;
+  }
+
+  function pickStream(files, format, target, allowDefaultAudio, audioIndex) {
     if (!files || !files.length) return null;
     // 'http' (progressive MP4) is intentionally NOT in any fallback list —
     // it freezes on Tizen players. Real auto resolution happens in
@@ -1730,11 +1741,14 @@
       ? ['hls4', 'hls2', 'hls']
       : [format, 'hls4', 'hls2', 'hls'];
 
+    function formatUrl(u, name) {
+      return name === 'hls' ? hlsAudioUrl(u && u[name], audioIndex) : u && u[name];
+    }
     function pickUrl(u) {
       for (var i = 0; i < fmtList.length; i++) {
         var k = fmtList[i];
         if (k === 'hls2' && allowDefaultAudio === false) continue;
-        if (u && u[k]) return u[k];
+        if (u && u[k]) return formatUrl(u, k);
       }
       return null;
     }
@@ -1764,7 +1778,10 @@
     return {
       url: url,
       quality: quality,
-      format: fmtList.filter(function (name) { return best.urls[name] === url; })[0] || '',
+      format: fmtList.filter(function (name) { return formatUrl(best.urls, name) === url; })[0] || '',
+      audioInUrl: typeof audioIndex === 'number' && fmtList.some(function (name) {
+        return name === 'hls' && best.urls.hls && hlsAudioUrl(best.urls.hls, 1) !== hlsAudioUrl(best.urls.hls, 2) && formatUrl(best.urls, name) === url;
+      }),
       currentQuality: best.quality,
       label: best.label
     };
@@ -2429,8 +2446,9 @@
     function streamForElement(element, target) {
       var fmt = formatForVoice(preferredFormat(), element.kp.files, element.kp.audios, choice.voice_key);
       var selected = (element.kp.audios || []).filter(function (audio) { return voiceKey(audio) === choice.voice_key; })[0];
-      var allowDefaultAudio = !selected || Number(selected.index) === 1;
-      var stream = pickStream(element.kp.files, fmt, target, allowDefaultAudio);
+      var audioIndex = selected ? Number(selected.index) || element.kp.audios.indexOf(selected) + 1 : 1;
+      var allowDefaultAudio = audioIndex === 1;
+      var stream = pickStream(element.kp.files, fmt, target, allowDefaultAudio, audioIndex);
       if (!stream) {
         Logger.warn('source', 'no stream picked', { kind: element.kp.kind, fmt: fmt });
         return null;
@@ -2446,7 +2464,7 @@
     // every Tizen player tested. Falling back to it makes things worse, not better.
     var FALLBACK_CHAIN = ['hls4', 'hls2', 'hls'];
 
-    function nextFallbackUrl(element, triedSet, allowDefaultAudio) {
+    function nextFallbackUrl(element, triedSet, allowDefaultAudio, audioIndex) {
       // pick best file <= maxQ
       var maxQ = maxQuality();
       var avail = (element.kp.files || []).filter(function (f) { return f.quality <= maxQ; });
@@ -2456,8 +2474,10 @@
       for (var i = 0; i < FALLBACK_CHAIN.length; i++) {
         var fmt = FALLBACK_CHAIN[i];
         if (fmt === 'hls2' && allowDefaultAudio === false) continue;
-        var url = best.urls && best.urls[fmt];
-        if (url && !triedSet[url]) return { url: url, fmt: fmt, q: best.quality };
+        var originalUrl = best.urls && best.urls[fmt];
+        var url = fmt === 'hls' ? hlsAudioUrl(originalUrl, audioIndex) : originalUrl;
+        var audioInUrl = fmt === 'hls' && originalUrl && hlsAudioUrl(originalUrl, 1) !== hlsAudioUrl(originalUrl, 2);
+        if (url && !triedSet[url]) return { url: url, fmt: fmt, q: best.quality, audioInUrl: !!audioInUrl };
       }
       return null;
     }
@@ -2533,7 +2553,7 @@
       } else {
         pendingVoice = (voiceIdx >= 0)
           ? { idx: voiceIdx, index: Number(audios[voiceIdx].index) || voiceIdx + 1,
-              lang: audios[voiceIdx].lang, codec: audioCodec(audios[voiceIdx]), channels: audios[voiceIdx].channels, count: audios.length, label: pickedLabel,
+              viaUrl: stream.audioInUrl, lang: audios[voiceIdx].lang, codec: audioCodec(audios[voiceIdx]), channels: audios[voiceIdx].channels, count: audios.length, label: pickedLabel,
               key: (choice && choice.voice_key) || '' }
           : null;
 
@@ -2610,7 +2630,7 @@
       var tried = {};
       tried[stream.url] = true;
       play.error = function (work, cb) {
-        var nxt = nextFallbackUrl(element, tried, !play._kpVoice || play._kpVoice.index === 1);
+        var nxt = nextFallbackUrl(element, tried, !play._kpVoice || play._kpVoice.index === 1, play._kpVoice && play._kpVoice.index);
         if (!nxt) {
           Logger.warn('player', 'no fallback URLs left', { tried: Object.keys(tried).length });
           Lampa.Noty.show('Не удалось воспроизвести выбранную озвучку. Попробуйте другой формат потока.');
@@ -2618,6 +2638,7 @@
         }
         tried[nxt.url] = true;
         work._kpFormat = nxt.fmt;
+        if (work._kpVoice) work._kpVoice.viaUrl = nxt.audioInUrl;
         Logger.warn('player', 'falling back to ' + nxt.fmt, { url: nxt.url, q: nxt.q });
         Lampa.Noty.show(Lampa.Lang.translate('kp_fallback') + ': ' + nxt.fmt);
         if (cb) cb(nxt.url);
@@ -4170,7 +4191,7 @@
             voiceApplied = false;
           });
           Lampa.PlayerVideo.listener.follow('tracks', function (event) {
-            if (voiceApplied || !pendingVoice) return;
+            if (voiceApplied || !pendingVoice || pendingVoice.viaUrl) return;
             voiceApplied = applyVoiceTrack(event && event.tracks);
             if (!voiceApplied) {
               Lampa.Noty.show('Выбранную озвучку не удалось сопоставить. Выберите дорожку в меню проигрывателя.');

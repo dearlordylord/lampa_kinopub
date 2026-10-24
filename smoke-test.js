@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const code = fs.readFileSync(process.env.KP_TEST_PLUGIN || path.join(__dirname, 'docs', 'kp.js'), 'utf8').replace('    /* ---------- public API expected by component ---------- */', '    window.__reviewBuildPlay = toPlayElement; window.__reviewSourceChoice = choice;').replace('  startPlugin();', '  window.__reviewVoiceChips = voiceChipsHtml; window.__reviewCreateSource = kpapi; window.__reviewVoiceVisible = isVoiceVisible; window.__reviewVoiceLabel = voiceLabel; window.__reviewFormatForVoice = formatForVoice; window.__reviewVoiceKey = voiceKey;\n  startPlugin();');
+const code = fs.readFileSync(process.env.KP_TEST_PLUGIN || path.join(__dirname, 'docs', 'kp.js'), 'utf8').replace('    /* ---------- public API expected by component ---------- */', '    window.__reviewBuildPlay = toPlayElement; window.__reviewSourceChoice = choice;').replace('  startPlugin();', '  window.__reviewVoiceChips = voiceChipsHtml; window.__reviewCreateSource = kpapi; window.__reviewHlsAudioUrl = hlsAudioUrl; window.__reviewVoiceVisible = isVoiceVisible; window.__reviewVoiceLabel = voiceLabel; window.__reviewFormatForVoice = formatForVoice; window.__reviewVoiceKey = voiceKey;\n  startPlugin();');
 
 // jQuery-ish sham — the plugin only uses $('<...>'), .on, .find, .append, .text,
 // and as a function that returns a thenable-free wrapper.
@@ -188,7 +188,7 @@ const missingJapaneseNotReportedSelected = hlsBackend.audioTrack === -1;
 // Real play.error path: a failed multi-audio stream must not fall back to
 // the single/default-audio HLS2 URL while keeping Japanese selected in the UI.
 const fallbackFixture = { title: 'Bleach', kp: { kind: 'episode', audios: [russian, japanese], files: [{ quality: 720, urls: {
-  hls4: 'https://cdn2cdn.com/multi4.m3u8', hls2: 'https://cdn2cdn.com/default-russian.m3u8', hls: 'https://cdn2cdn.com/legacy.m3u8'
+  hls4: 'https://cdn2cdn.com/multi4.m3u8', hls2: 'https://cdn2cdn.com/default-russian.m3u8', hls: 'https://cdn2cdn.com/master-v1a1.m3u8?loc=de'
 } }] } };
 storage.kp_format = 'hls4';
 sandbox.window.__reviewSourceChoice.voice_key = sandbox.window.__reviewVoiceKey(japanese);
@@ -197,6 +197,7 @@ const fallbackUrls = [];
 fallbackPlay.error(fallbackPlay, url => fallbackUrls.push(url));
 const noDefaultAudioFallback = !fallbackUrls.includes(fallbackFixture.kp.files[0].urls.hls2);
 const fallbackFormatRecorded = fallbackPlay._kpFormat === 'hls';
+const fallbackKeepsJapaneseUrl = fallbackUrls[0] === 'https://cdn2cdn.com/master-v1a2.m3u8?loc=de';
 fallbackPlay.error(fallbackPlay, url => fallbackUrls.push(url));
 const noFalseUrlAfterExhaustion = fallbackUrls.length === 1;
 const singleOnlyFixture = { title: 'Bleach', kp: { kind: 'episode', audios: [russian, japanese], files: [{ quality: 720, urls: { hls2: 'https://cdn2cdn.com/russian.m3u8' } }] } };
@@ -207,7 +208,25 @@ const defaultFallbacks = [];
 defaultPlay.error(defaultPlay, url => defaultFallbacks.push(url));
 const russianFallbackPreserved = defaultFallbacks[0] === fallbackFixture.kp.files[0].urls.hls2;
 storage.kp_format = 'auto';
+// CDNServices' published legacy-HLS protocol selects audio in the pathname.
+// A player track setter cannot select a second audio inside a one-audio URL.
+storage.kp_format = 'hls';
+sandbox.window.__reviewSourceChoice.voice_key = sandbox.window.__reviewVoiceKey(japanese);
+const directFixture = { title: 'Bleach', kp: { kind: 'episode', audios: [russian, japanese], files: [
+  { quality: 720, urls: { hls: 'https://cdn2cdn.com/signed-path/master-v1a1.m3u8?access=TEST&loc=de' } },
+  { quality: 480, urls: { hls: 'https://cdn2cdn.com/low/master-v1a1.m3u8?access=TEST&loc=de' } }
+] } };
+const directJapanese = sandbox.window.__reviewBuildPlay(directFixture);
+const dedicatedJapaneseUrl = directJapanese.url === 'https://cdn2cdn.com/signed-path/master-v1a2.m3u8?access=TEST&loc=de';
+const qualityKeepsJapanese = Object.values(directJapanese.quality).every(url => url.includes('/master-v1a2.m3u8?'));
+storage.kp_format = 'auto';
 const checks = [
+  ['Fallback HLS URL also carries selected Japanese audio', fallbackKeepsJapaneseUrl],
+  ['Dedicated HLS audio bypasses opaque native track toggling', directJapanese._kpVoice.viaUrl === true],
+  ['Audio URL selection never rewrites a signed query value', sandbox.window.__reviewHlsAudioUrl('https://cdn2cdn.com/video.m3u8?next=/master-v1a1.m3u8', 2) === 'https://cdn2cdn.com/video.m3u8?next=/master-v1a1.m3u8'],
+  ['Invalid audio indices leave stream URLs unchanged', sandbox.window.__reviewHlsAudioUrl('https://cdn2cdn.com/master-v1a1.m3u8', 0) === 'https://cdn2cdn.com/master-v1a1.m3u8'],
+  ['Legacy HLS requests Japanese by changing only the audio pathname', dedicatedJapaneseUrl],
+  ['Every quality URL preserves selected Japanese audio', qualityKeepsJapanese],
   ['Diagnostic stream format follows actual fallback', fallbackFormatRecorded],
   ['No false URL is loaded after fallback exhaustion', noFalseUrlAfterExhaustion],
   ['Initial stream cannot silently substitute default Russian for Japanese', refusesWrongInitialStream],

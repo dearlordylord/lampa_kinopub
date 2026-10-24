@@ -194,3 +194,7 @@ The optional KpAudioDiagnostics hook attaches only our bundled, read-only teleme
 The user reproduced Japanese-selected/Russian-audible playback with HLS4. Live, redacted metadata showed a fatal playback error before a single unlabelled audio track became available. The actual plugin error callback reproduced the wrong-language fallback: HLS4 failure selected HLS2, which is documented in this code as default/single-audio. A failing regression now covers that callback. For nondefault API audio indices, HLS2 is excluded both from initial URL fallback and from playback-error fallback. Default Russian retains its existing HLS2 fallback. Exhaustion no longer passes false as a URL to Lampa.
 
 The active format is carried as a local enum for opt-in diagnostics. This fixes the demonstrated fallback defect; it does not establish why HLS4 failed, nor prove audible Japanese on Samsung.
+
+## Personal build 7: legacy HLS pathname audio selector
+
+Static inspection of CDNServices' published client revealed legacy HLS audio selection by replacing the master-v1aN pathname. The compatibility helper was implemented independently, with no third-party app code, additional network domains, analytics or scripts. It preserves signed queries and prefixes, updates all quality/fallback URLs, and skips in-stream track toggling when audio has been selected by the master URL. Regression tests first failed for Japanese URL/quality selection, then passed. See CDNSERVICES-PROTOCOL.md for primary links and attribution limitations. Real TV audibility remains to be checked.
