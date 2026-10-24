@@ -188,3 +188,9 @@ Local tests do not verify Samsung hardware, the user's Bleach API response, code
 ## Personal build 5: opt-in diagnostic attachment
 
 The optional KpAudioDiagnostics hook attaches only our bundled, read-only telemetry module. Player metadata now includes the selected audio codec and channel count so diagnostics do not need account data or source URLs. No arbitrary JavaScript execution, author server, global console logger, or remote control was added. The module and exact temporary upload destination are pinned and reviewed in the Lampa repository.
+
+## Personal build 6: preserve audio intent across failures
+
+The user reproduced Japanese-selected/Russian-audible playback with HLS4. Live, redacted metadata showed a fatal playback error before a single unlabelled audio track became available. The actual plugin error callback reproduced the wrong-language fallback: HLS4 failure selected HLS2, which is documented in this code as default/single-audio. A failing regression now covers that callback. For nondefault API audio indices, HLS2 is excluded both from initial URL fallback and from playback-error fallback. Default Russian retains its existing HLS2 fallback. Exhaustion no longer passes false as a URL to Lampa.
+
+The active format is carried as a local enum for opt-in diagnostics. This fixes the demonstrated fallback defect; it does not establish why HLS4 failed, nor prove audible Japanese on Samsung.

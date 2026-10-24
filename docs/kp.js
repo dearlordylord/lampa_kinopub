@@ -22,7 +22,7 @@
    *  CONSTANTS                                                   *
    * ============================================================ */
 
-  var PLUGIN_VERSION  = '1.0.73-personal.5';
+  var PLUGIN_VERSION  = '1.0.73-personal.6';
   // Public manifest-proxy URL — set near KP_PROXY_URL declaration below.
   var COMPONENT_NAME  = 'online_kp';
   var BALANSER        = 'kpapi';
@@ -1721,7 +1721,7 @@
     return format;
   }
 
-  function pickStream(files, format, target) {
+  function pickStream(files, format, target, allowDefaultAudio) {
     if (!files || !files.length) return null;
     // 'http' (progressive MP4) is intentionally NOT in any fallback list —
     // it freezes on Tizen players. Real auto resolution happens in
@@ -1733,6 +1733,7 @@
     function pickUrl(u) {
       for (var i = 0; i < fmtList.length; i++) {
         var k = fmtList[i];
+        if (k === 'hls2' && allowDefaultAudio === false) continue;
         if (u && u[k]) return u[k];
       }
       return null;
@@ -1763,6 +1764,7 @@
     return {
       url: url,
       quality: quality,
+      format: fmtList.filter(function (name) { return best.urls[name] === url; })[0] || '',
       currentQuality: best.quality,
       label: best.label
     };
@@ -2426,7 +2428,9 @@
 
     function streamForElement(element, target) {
       var fmt = formatForVoice(preferredFormat(), element.kp.files, element.kp.audios, choice.voice_key);
-      var stream = pickStream(element.kp.files, fmt, target);
+      var selected = (element.kp.audios || []).filter(function (audio) { return voiceKey(audio) === choice.voice_key; })[0];
+      var allowDefaultAudio = !selected || Number(selected.index) === 1;
+      var stream = pickStream(element.kp.files, fmt, target, allowDefaultAudio);
       if (!stream) {
         Logger.warn('source', 'no stream picked', { kind: element.kp.kind, fmt: fmt });
         return null;
@@ -2442,7 +2446,7 @@
     // every Tizen player tested. Falling back to it makes things worse, not better.
     var FALLBACK_CHAIN = ['hls4', 'hls2', 'hls'];
 
-    function nextFallbackUrl(element, triedSet) {
+    function nextFallbackUrl(element, triedSet, allowDefaultAudio) {
       // pick best file <= maxQ
       var maxQ = maxQuality();
       var avail = (element.kp.files || []).filter(function (f) { return f.quality <= maxQ; });
@@ -2451,6 +2455,7 @@
       var best = avail[0]; // already sorted desc
       for (var i = 0; i < FALLBACK_CHAIN.length; i++) {
         var fmt = FALLBACK_CHAIN[i];
+        if (fmt === 'hls2' && allowDefaultAudio === false) continue;
         var url = best.urls && best.urls[fmt];
         if (url && !triedSet[url]) return { url: url, fmt: fmt, q: best.quality };
       }
@@ -2480,6 +2485,7 @@
       var play = {
         title:    displayTitle,
         url:      stream.url,
+        _kpFormat: stream.format,
         quality:  stream.quality,
         timeline: element.timeline,
         callback: element.mark
@@ -2604,13 +2610,14 @@
       var tried = {};
       tried[stream.url] = true;
       play.error = function (work, cb) {
-        var nxt = nextFallbackUrl(element, tried);
+        var nxt = nextFallbackUrl(element, tried, !play._kpVoice || play._kpVoice.index === 1);
         if (!nxt) {
           Logger.warn('player', 'no fallback URLs left', { tried: Object.keys(tried).length });
-          if (cb) cb(false);
+          Lampa.Noty.show('Не удалось воспроизвести выбранную озвучку. Попробуйте другой формат потока.');
           return;
         }
         tried[nxt.url] = true;
+        work._kpFormat = nxt.fmt;
         Logger.warn('player', 'falling back to ' + nxt.fmt, { url: nxt.url, q: nxt.q });
         Lampa.Noty.show(Lampa.Lang.translate('kp_fallback') + ': ' + nxt.fmt);
         if (cb) cb(nxt.url);

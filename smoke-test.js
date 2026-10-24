@@ -185,7 +185,34 @@ emit(playerEvents, 'start', japanesePlay);
 hlsBackend.audioTrack = -1;
 emit(videoEvents, 'tracks', { tracks: [realTracks[0]] });
 const missingJapaneseNotReportedSelected = hlsBackend.audioTrack === -1;
+// Real play.error path: a failed multi-audio stream must not fall back to
+// the single/default-audio HLS2 URL while keeping Japanese selected in the UI.
+const fallbackFixture = { title: 'Bleach', kp: { kind: 'episode', audios: [russian, japanese], files: [{ quality: 720, urls: {
+  hls4: 'https://cdn2cdn.com/multi4.m3u8', hls2: 'https://cdn2cdn.com/default-russian.m3u8', hls: 'https://cdn2cdn.com/legacy.m3u8'
+} }] } };
+storage.kp_format = 'hls4';
+sandbox.window.__reviewSourceChoice.voice_key = sandbox.window.__reviewVoiceKey(japanese);
+const fallbackPlay = sandbox.window.__reviewBuildPlay(fallbackFixture);
+const fallbackUrls = [];
+fallbackPlay.error(fallbackPlay, url => fallbackUrls.push(url));
+const noDefaultAudioFallback = !fallbackUrls.includes(fallbackFixture.kp.files[0].urls.hls2);
+const fallbackFormatRecorded = fallbackPlay._kpFormat === 'hls';
+fallbackPlay.error(fallbackPlay, url => fallbackUrls.push(url));
+const noFalseUrlAfterExhaustion = fallbackUrls.length === 1;
+const singleOnlyFixture = { title: 'Bleach', kp: { kind: 'episode', audios: [russian, japanese], files: [{ quality: 720, urls: { hls2: 'https://cdn2cdn.com/russian.m3u8' } }] } };
+const refusesWrongInitialStream = sandbox.window.__reviewBuildPlay(singleOnlyFixture) === null;
+sandbox.window.__reviewSourceChoice.voice_key = sandbox.window.__reviewVoiceKey(russian);
+const defaultPlay = sandbox.window.__reviewBuildPlay(fallbackFixture);
+const defaultFallbacks = [];
+defaultPlay.error(defaultPlay, url => defaultFallbacks.push(url));
+const russianFallbackPreserved = defaultFallbacks[0] === fallbackFixture.kp.files[0].urls.hls2;
+storage.kp_format = 'auto';
 const checks = [
+  ['Diagnostic stream format follows actual fallback', fallbackFormatRecorded],
+  ['No false URL is loaded after fallback exhaustion', noFalseUrlAfterExhaustion],
+  ['Initial stream cannot silently substitute default Russian for Japanese', refusesWrongInitialStream],
+  ['Default Russian still has its working HLS2 fallback', russianFallbackPreserved],
+  ['Japanese playback cannot silently fall back to default Russian HLS2', noDefaultAudioFallback],
   ['Play element uses multi-audio stream and carries Japanese metadata', japanesePlay.url === formatFixture[0].urls.hls && japanesePlay._kpVoice.lang === 'jpn' && japanesePlay._kpVoice.index === 2],
   ['Player receives actual tracks rather than a synthetic Japanese label', !japanesePlay.voiceovers && !japanesePlay.translate],
   ['Each episode applies its own pending voice on actual player start', nextEpisodeRestoresItsVoice],
