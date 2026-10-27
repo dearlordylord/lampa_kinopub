@@ -22,7 +22,7 @@
    *  CONSTANTS                                                   *
    * ============================================================ */
 
-  var PLUGIN_VERSION  = '1.0.73-personal.7';
+  var PLUGIN_VERSION  = '1.0.73-personal.8';
   // Public manifest-proxy URL — set near KP_PROXY_URL declaration below.
   var COMPONENT_NAME  = 'online_kp';
   var BALANSER        = 'kpapi';
@@ -372,6 +372,9 @@
       },
       item: function (network, id, ok, err) {
         api(network, '/items/' + id, null, ok, err);
+      },
+      mediaLinks: function (network, mediaId, ok, err) {
+        api(network, '/items/media-links', { mid: mediaId }, ok, err);
       },
       profile: function (network, ok, err) {
         api(network, '/user', null, ok, err);
@@ -1797,6 +1800,36 @@
     }).filter(function (s) { return !!s.url; });
   }
 
+  function setupSubtitleLoading() {
+    var generation = 0, pending = null;
+    function cancel() {
+      generation++;
+      var network = pending;
+      pending = null;
+      if (network) network.clear();
+    }
+    Lampa.Player.listener.follow('destroy', cancel);
+    Lampa.Player.listener.follow('ready', function (play) {
+      cancel();
+      if (!Lampa.Storage.get(KEY_SUBS, false) || !play || !play._kpMediaId ||
+          (Array.isArray(play.subtitles) && play.subtitles.length)) return;
+      var current = generation;
+      var network = pending = new Lampa.Reguest();
+      KP.mediaLinks(network, play._kpMediaId, function (media) {
+        if (current !== generation || Lampa.Player.playdata() !== play ||
+            !Lampa.Storage.get(KEY_SUBS, false)) return;
+        pending = null;
+        if (!media || !Array.isArray(media.subtitles)) return;
+        var subs = buildSubtitles(media.subtitles.filter(function (sub) { return sub && typeof sub.url === 'string'; }));
+        if (!subs.length) return;
+        play.subtitles = subs;
+        Lampa.Player.subtitles(subs);
+      }, function () {
+        if (current === generation) pending = null;
+      });
+    });
+  }
+
   function audioInfo(audios) {
     if (!audios || !audios.length) return '';
     var names = [];
@@ -2293,6 +2326,7 @@
             episodes: (s.episodes || []).map(function (ep, idx) {
               return {
                 id:        ep.id || (s.number + '_' + (ep.number || idx + 1)),
+                mediaId:   /^\d+$/.test(String(ep.id || ep.media_id)) ? Number(ep.id || ep.media_id) : 0,
                 number:    ep.number || idx + 1,
                 title:     ep.title || '',
                 thumb:     ep.thumbnail,
@@ -2410,7 +2444,7 @@
         return season.episodes.map(function (ep) {
           var stream = pickStream(ep.files, fmt);
           return {
-            kp:           { kind: 'episode', files: ep.files, audios: ep.audios, subtitles: ep.subtitles },
+            kp:           { kind: 'episode', mediaId: ep.mediaId, files: ep.files, audios: ep.audios, subtitles: ep.subtitles },
             episode:      ep.number,
             season:       season.number,
             // display title for the in-source episode list (filmix-style)
@@ -2510,6 +2544,10 @@
         timeline: element.timeline,
         callback: element.mark
       };
+
+      if (element.kp.kind === 'episode' && /^\d+$/.test(String(element.kp.mediaId)) && Number(element.kp.mediaId) > 0) {
+        play._kpMediaId = Number(element.kp.mediaId);
+      }
 
       // ── Voice selection ────────────────────────────────────────────────
       // Filter is the canonical UI for picking voice (choice.voice_key).
@@ -4240,6 +4278,7 @@
     // (HEVC) variants and races with AVPlayer fetch, causing intermittent
     // Tizen app crash on HEVC 4K initial play. See setupKpPlayerPatch().
     setupKpPlayerPatch();
+    setupSubtitleLoading();
 
     // Probe public manifest-proxy. If reachable, kpProxyAvailable=true and
     // future launches will route HLS4 master through it (gives stable 4K +
