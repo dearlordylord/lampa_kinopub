@@ -49,6 +49,9 @@ let storage = { kp_token: 'review-token', kp_log_url: 'https://untrusted.example
 const apiRequests = [];
 const xhrRequests = [];
 const syncKeys = [];
+const mediaRequests = [];
+const appliedSubtitles = [];
+let activePlay = null;
 
 const Lampa = {
   Manifest: {
@@ -67,13 +70,14 @@ const Lampa = {
   Reguest: function () {
     this.silent = function (url, ok, err, body, params) {
       apiRequests.push({ url, body, headers: params && params.headers });
+      if (url.includes('/v1/items/media-links?')) { mediaRequests.push({ url, ok, err, network: this }); return; }
       if (url.endsWith('/v1/user')) ok({ user: { username: 'review-user' } });
       else ok({});
     };
     this.quiet = function () {};
     this.native = function () {};
     this.timeout = function () {};
-    this.clear = function () {};
+    this.clear = function () { this.cleared = true; };
     this.errorDecode = function () { return ''; };
   },
   Utils: {
@@ -107,7 +111,7 @@ const Lampa = {
   Template: { add: () => {}, get: () => $('<div></div>') },
   TMDB: { key: () => 'k', api: (u) => u, image: () => '' },
   PlayerVideo: { listener: events(videoEvents) },
-  Player: { listener: events(playerEvents), play: () => {}, playlist: () => {}, runas: () => {}, callback: () => {} },
+  Player: { playdata: () => activePlay, subtitles: subs => appliedSubtitles.push(subs), listener: events(playerEvents), play: () => {}, playlist: () => {}, runas: () => {}, callback: () => {} },
   Platform: { is: (n) => n === 'browser', tv: () => false, mouse: () => true, screen: () => 'mobile', any: () => true },
   Scroll: function () { this.render = () => $(); this.body = () => $(); this.minus = () => {}; this.append = () => {}; this.update = () => {}; this.clear = () => {}; this.destroy = () => {}; },
   Explorer: function () { this.render = () => $(); this.appendFiles = () => {}; this.appendHead = () => {}; this.destroy = () => {}; },
@@ -306,6 +310,83 @@ if (kpComponentRegistered) {
 }
 
 if (xhrRequests.length !== 0) { console.error('FAIL remote requests after card open'); fail++; }
+
+
+try {
+  const assert = require('node:assert/strict');
+  const urls = Array.from({ length: 5 }, (_, i) => ({ lang: i < 3 ? 'eng' : 'rus', url: 'https://cdn2cdn.com/episode2-' + i + '.srt' }));
+  function episode(mediaId, subtitles) {
+    return sandbox.window.__reviewBuildPlay(Object.assign({}, playFixture, {
+      kp: Object.assign({}, playFixture.kp, { mediaId, subtitles: subtitles || [] })
+    }));
+  }
+  function ready(play) { activePlay = play; emit(playerEvents, 'ready', play); }
+  storage.kp_subtitles_enabled = true;
+  const second = episode(1037632);
+  const originalUrl = second.url;
+  const originalVoice = second._kpVoice;
+  ready(second);
+  assert.equal(mediaRequests.length, 1, 'empty episode metadata must request canonical media subtitles');
+  assert.equal(second._kpMediaId, 1037632, 'real media ID reaches the play item');
+  assert.equal(mediaRequests[0].url, 'https://api.service-kp.com/v1/items/media-links?mid=1037632');
+  mediaRequests[0].ok({ subtitles: urls });
+  assert.equal(appliedSubtitles.at(-1).length, 5, 'Ludwig episode 2 exposes all five canonical subtitle tracks');
+  assert.equal(second.subtitles.length, 5);
+  assert.equal(second.url, originalUrl, 'subtitle hydration never changes the stream URL');
+  assert.equal(second._kpVoice, originalVoice, 'subtitle hydration never changes audio selection');
+  pass++;
+  console.log('OK   empty episode-2 metadata resolves five canonical subtitle tracks');
+
+  const first = episode(1037581);
+  ready(first);
+  const stale = mediaRequests.at(-1);
+  const next = episode(1037632);
+  ready(next);
+  const current = mediaRequests.at(-1);
+  const before = appliedSubtitles.length;
+  stale.ok({ subtitles: urls });
+  assert.equal(appliedSubtitles.length, before, 'late episode-1 response cannot overwrite episode 2');
+  assert.equal(stale.network.cleared, true);
+  current.ok({ subtitles: urls });
+  assert.equal(appliedSubtitles.length, before + 1, 'next-episode ready resolves its own tracks');
+  pass++;
+  console.log('OK   next-episode hydration rejects stale responses');
+
+  ready(episode(1037632));
+  const destroyed = mediaRequests.at(-1);
+  emit(playerEvents, 'destroy', {});
+  const count = appliedSubtitles.length;
+  destroyed.ok({ subtitles: urls });
+  assert.equal(appliedSubtitles.length, count);
+  assert.equal(destroyed.network.cleared, true);
+  const requestsBeforeSkip = mediaRequests.length;
+  ready(episode(1037581, urls.slice(0, 2)));
+  ready({ url: 'https://cdn2cdn.com/other.m3u8' });
+  ready(episode('1_2'));
+  storage.kp_subtitles_enabled = false;
+  ready(episode(1037632));
+  assert.equal(mediaRequests.length, requestsBeforeSkip, 'existing subtitles, non-KP items, synthetic IDs and disabled setting skip requests');
+  storage.kp_subtitles_enabled = true;
+  ready(episode(1037632));
+  storage.kp_subtitles_enabled = false;
+  mediaRequests.at(-1).ok({ subtitles: urls });
+  assert.equal(appliedSubtitles.length, count, 'setting is checked again after the response');
+  storage.kp_subtitles_enabled = true;
+  for (const invalid of [{}, { subtitles: [] }, { subtitles: 'not an array' }, { subtitles: [null, { lang: 'eng' }] }]) {
+    ready(episode(1037632));
+    mediaRequests.at(-1).ok(invalid);
+    assert.equal(appliedSubtitles.length, count, 'empty or malformed replies leave playback alone');
+  }
+  ready(episode(1037632));
+  mediaRequests.at(-1).err({ status: 500 }, 'error');
+  assert.equal(appliedSubtitles.length, count, 'failed request leaves playback alone');
+  assert(apiRequests.every(r => r.url.startsWith('https://api.service-kp.com/') && r.headers.Authorization === 'Bearer review-token'));
+  pass++;
+  console.log('OK   hydration respects destroy, setting, existing tracks, invalid IDs and API failures');
+} catch (error) {
+  fail++;
+  console.error('FAIL episode subtitle hydration:', error.stack || error);
+}
 
 console.log(`\n=== ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);
