@@ -455,8 +455,8 @@ try {
   assert.deepEqual(seen.slice(0, 2), [['Монолог фармацевта', 'serial'], ['Монолог фармацевта', '']]);
   assert.equal(itemRequests.at(-1), 'https://api.service-kp.com/v1/items/300', 'untyped retry opens the item');
   const stems = [];
-  open((q) => { stems.push(q); return q === 'фармацев' ? { items: [apothecary] } : { items: [] }; });
-  assert(stems.includes('фармацев') && itemRequests.length === 1, 'word-stem retry finds a renamed title');
+  open((q) => { stems.push(q); return q === 'фармацевта' ? { items: [apothecary] } : { items: [] }; });
+  assert(stems.includes('фармацевта') && itemRequests.length === 1, 'word-stem retry finds a renamed title');
   open(() => 'fail');
   const failNotice = notices.slice();
   const jojoMovie = { id: 45790, name: 'Невероятные приключения ДжоДжо', original_name: 'ジョジョの奇妙な冒険', first_air_date: '2012-10-06', seasons: [] };
@@ -466,11 +466,17 @@ try {
     { id: 3, title: 'Невероятное приключение ДжоДжо: Гонка «Стальной шар» / Steel Ball Run', year: 2026, type: 'serial' },
     { id: 4, title: 'Невероятные приключения Шерлока / Sherlock', year: 2010, type: 'serial' }
   ];
-  searchResponder = (q) => q === 'приключен' ? { items: noise } : { items: [] };
+  const jojoQueries = [];
+  searchResponder = (q) => { jojoQueries.push(q); return q === 'ДжоДжо' ? { items: noise } : { items: noise.slice(0, 1).concat(noise.slice(3)) }; };
   const lists = [];
   const comp = { similars: (l) => lists.push(Array.from(l, x => x.id)), loading: () => {}, doesNotAnswer: () => lists.push('none') };
   new sandbox.window.__reviewCreateSource(comp, { movie: jojoMovie }).searchByTitle({ movie: jojoMovie }, jojoMovie.name);
   assert.deepEqual(lists, [[3, 2]], 'only JoJo items, newest first; no Winnie-the-Pooh');
+  assert(jojoQueries.includes('ДжоДжо'), 'noise-only full-title answer does not stop the whole-word retry');
+  lists.length = 0;
+  searchResponder = () => ({ items: noise.slice(0, 1).concat(noise.slice(3)) });
+  new sandbox.window.__reviewCreateSource(comp, { movie: jojoMovie }).searchByTitle({ movie: jojoMovie }, jojoMovie.name);
+  assert.deepEqual(lists, [[4, 1]], 'no relevant item: still list what kinopub returned, best first, never empty');
   notices.splice(0, notices.length, ...failNotice);
   assert(notices.some(m => /KinoPub: search \(HTTP 503\)/.test(m)), 'search error is shown on screen');
   searchResponder = null;

@@ -2184,7 +2184,7 @@
     // name; retry before declaring it missing. First non-empty answer wins.
     function fallbackQueries(query, type, orig, rus) {
       var list = [[query, type], [query, ''], [rus, ''], [orig, '']];
-      titleStems(rus || query).slice(0, 4).forEach(function (w) { if (w.length >= 4) list.push([w, '']); });
+      titleWords(rus || query).slice(0, 4).forEach(function (w) { if (w.length >= 4) list.push([w, '']); });
       var seen = {};
       return list.filter(function (q) {
         var key = q[0] + '|' + q[1];
@@ -2196,10 +2196,16 @@
 
     // Crude Russian/Latin stems: "Невероятные приключения ДжоДжо" ->
     // ["невероят", "приключен", "джод"]; tolerant to case endings.
+    // Whole words for search queries: kinopub search does not match word prefixes.
+    function titleWords(title) {
+      return String(title || '').split(/[^a-zA-Zа-яА-ЯёЁ0-9]+/).filter(function (w) { return w.length >= 3; });
+    }
+
     function titleStems(title) {
-      return String(title || '').toLowerCase().replace(/ё/g, 'е').split(/[^a-zа-я0-9]+/).filter(function (w) {
-        return w.length >= 3;
-      }).map(function (w) { return w.length > 5 ? w.slice(0, -2) : (w.length > 3 ? w.slice(0, -1) : w); });
+      return titleWords(title.toLowerCase ? title.toLowerCase().replace(/ё/g, 'е') : title).map(function (w) {
+        w = w.toLowerCase();
+        return w.length > 5 ? w.slice(0, -2) : (w.length > 3 ? w.slice(0, -1) : w);
+      });
     }
 
     function relevance(c, stems) {
@@ -2208,25 +2214,31 @@
       return stems.filter(function (w) { return t.indexOf(normalize(w)) >= 0; }).length / stems.length;
     }
 
-    // Keep only candidates that carry every word of the title (falling back
-    // to most of them), newest first; fuzzy kinopub search returns noise.
+    // Keep only candidates that carry every word of the title, newest first;
+    // fuzzy kinopub search returns noise ("приключения" -> Winnie-the-Pooh).
     function relevantSimilars(items) {
       var stems = titleStems(object.movie.name || object.movie.title || '');
       var scored = items.map(function (c) { return { c: c, r: relevance(c, stems) }; });
-      var full = scored.filter(function (x) { return x.r === 1; });
-      var keep = full.length ? full : scored.filter(function (x) { return x.r >= 0.6; });
-      return keep.map(function (x) { return x.c; }).sort(function (x, y) {
-        return parseInt(y.year || 0, 10) - parseInt(x.year || 0, 10);
-      });
+      return scored.filter(function (x) { return x.r === 1; }).map(function (x) { return x.c; }).sort(byYearDesc);
+    }
+
+    function byYearDesc(x, y) { return parseInt(y.year || 0, 10) - parseInt(x.year || 0, 10); }
+
+    // Nothing carries the title: still show what kinopub returned, best first.
+    function rankedSimilars(items) {
+      var stems = titleStems(object.movie.name || object.movie.title || '');
+      return items.map(function (c) { return { c: c, r: relevance(c, stems) }; }).sort(function (x, y) {
+        return (y.r - x.r) || byYearDesc(x.c, y.c);
+      }).slice(0, 30).map(function (x) { return x.c; });
     }
 
     function searchWithFallbacks(queries, ok, err) {
-      var lastError = null;
+      var lastError = null, firstHit = null;
       (function next(i) {
-        if (i >= queries.length) return lastError ? err(lastError.xhr, lastError.status) : ok({ items: [] });
+        if (i >= queries.length) return firstHit ? ok(firstHit) : (lastError ? err(lastError.xhr, lastError.status) : ok({ items: [] }));
         KP.search(network, queries[i][0], queries[i][1], function (json) {
-          var stemQuery = i >= 4;
-          if (json && json.items && json.items.length && (!stemQuery || relevantSimilars(json.items).length)) {
+          if (json && json.items && json.items.length && !firstHit) firstHit = json;
+          if (json && json.items && json.items.length && relevantSimilars(json.items).length) {
             if (i) Logger.info('source', 'fallback query hit', { query: queries[i][0], type: queries[i][1] });
             return ok(json);
           }
@@ -2252,9 +2264,8 @@
           var relevant = relevantSimilars(items);
           Logger.warn('source', 'no exact match, showing similars', { count: items.length, relevant: relevant.length });
           if (relevant.length === 1) return self.find(relevant[0].id);
-          if (!relevant.length) return component.doesNotAnswer();
           waitSimilars = true;
-          component.similars(relevant.map(adaptSimilar));
+          component.similars((relevant.length ? relevant : rankedSimilars(items)).map(adaptSimilar));
           component.loading(false);
         } else {
           Logger.warn('source', 'nothing found');
