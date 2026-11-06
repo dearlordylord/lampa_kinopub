@@ -53,6 +53,7 @@ const mediaRequests = [];
 const appliedSubtitles = [];
 let activePlay = null;
 let searchResponder = null;
+const notices = [];
 const itemRequests = [];
 
 const Lampa = {
@@ -73,7 +74,7 @@ const Lampa = {
     this.silent = function (url, ok, err, body, params) {
       apiRequests.push({ url, body, headers: params && params.headers });
       if (url.includes('/v1/items/media-links?')) { mediaRequests.push({ url, ok, err, network: this }); return; }
-      if (url.includes('/v1/items/search?') && searchResponder) { ok(searchResponder(new URL(url).searchParams.get('q'))); return; }
+      if (url.includes('/v1/items/search?') && searchResponder) { const sp = new URL(url).searchParams; const r = searchResponder(sp.get('q'), sp.get('type') || ''); if (r === 'fail') err({ status: 503 }, 'error'); else ok(r); return; }
       if (/\/v1\/items\/\d+$/.test(url)) { itemRequests.push(url); }
       if (url.endsWith('/v1/user')) ok({ user: { username: 'review-user' } });
       else ok({});
@@ -126,7 +127,7 @@ const Lampa = {
   Timeline: { view: () => ({ percent: 0, time: 0, duration: 0 }), render: () => $(), update: () => {} },
   Account: { logged: () => false, subscribeToTranslation: () => {} },
   Favorite: { add: () => {} },
-  Noty: { show: () => {} },
+  Noty: { show: (m) => { notices.push(m); } },
   SettingsApi: {
     addComponent: (c) => { settingsAdded.push({ kind: 'component', ...c }); },
     addParam: (p) => { settingsAdded.push({ kind: 'param', name: p.param.name }); }
@@ -433,6 +434,37 @@ try {
 } catch (error) {
   fail++;
   console.error('FAIL later season parts:', error.stack || error);
+}
+
+try {
+  const assert = require('node:assert/strict');
+  const apothecary = { id: 300, title: 'Монолог фармацевта / Kusuriya no Hitorigoto', year: 2023, type: 'anime', imdb: 0 };
+  const movie = { id: 220542, name: 'Монолог фармацевта', original_name: '薬屋のひとりごと', first_air_date: '2023-10-22',
+    number_of_seasons: 1, seasons: [{ season_number: 1, name: 'Сезон 1', air_date: '2023-10-22' }] };
+  function open(responder) {
+    const shown = [];
+    searchResponder = responder;
+    itemRequests.length = 0;
+    notices.length = 0;
+    const component = { similars: (l) => shown.push(l), loading: () => {}, doesNotAnswer: () => shown.push('none') };
+    new sandbox.window.__reviewCreateSource(component, { movie }).searchByTitle({ movie }, movie.name);
+    return shown;
+  }
+  const seen = [];
+  open((q, type) => { seen.push([q, type]); return type === 'serial' ? { items: [] } : { items: [apothecary] }; });
+  assert.deepEqual(seen.slice(0, 2), [['Монолог фармацевта', 'serial'], ['Монолог фармацевта', '']]);
+  assert.equal(itemRequests.at(-1), 'https://api.service-kp.com/v1/items/300', 'untyped retry opens the item');
+  const stems = [];
+  open((q) => { stems.push(q); return q === 'фармацевт' ? { items: [apothecary] } : { items: [] }; });
+  assert(stems.includes('фармацевт') && itemRequests.length === 1, 'word-stem retry finds a renamed title');
+  open(() => 'fail');
+  assert(notices.some(m => /KinoPub: search \(HTTP 503\)/.test(m)), 'search error is shown on screen');
+  searchResponder = null;
+  pass++;
+  console.log('OK   empty typed search retries untyped and by word stem; errors shown on screen');
+} catch (error) {
+  fail++;
+  console.error('FAIL search fallbacks:', error.stack || error);
 }
 
 console.log(`\n=== ${pass} pass, ${fail} fail ===`);

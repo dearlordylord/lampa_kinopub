@@ -2102,7 +2102,7 @@
       });
 
       network.clear();
-      KP.search(network, query, typeFilter, function (json) {
+      searchWithFallbacks(fallbackQueries(query, typeFilter, orig, rus), function (json) {
         var items = (json && json.items) || [];
         Logger.info('source', 'search ok', { count: items.length });
 
@@ -2175,9 +2175,48 @@
         openMatch(self, card, items);
       }, function (xhr, status) {
         Logger.error('source', 'search error', { http: xhr && xhr.status, status: status });
+        notifyFailure('search', xhr);
         component.doesNotAnswer();
       });
     };
+
+    // Kinopub may file a title under another type or a slightly different
+    // name; retry before declaring it missing. First non-empty answer wins.
+    function fallbackQueries(query, type, orig, rus) {
+      var word = String(rus || query).split(/[^a-zA-Zа-яА-ЯёЁ0-9]+/).sort(function (x, y) { return y.length - x.length; })[0] || '';
+      if (word.length > 6) word = word.slice(0, -1);
+      var list = [[query, type], [query, ''], [rus, ''], [orig, ''], [word.length >= 4 ? word : '', '']];
+      var seen = {};
+      return list.filter(function (q) {
+        var key = q[0] + '|' + q[1];
+        if (!q[0] || seen[key]) return false;
+        seen[key] = true;
+        return true;
+      });
+    }
+
+    function searchWithFallbacks(queries, ok, err) {
+      var lastError = null;
+      (function next(i) {
+        if (i >= queries.length) return lastError ? err(lastError.xhr, lastError.status) : ok({ items: [] });
+        KP.search(network, queries[i][0], queries[i][1], function (json) {
+          if (json && json.items && json.items.length) {
+            if (i) Logger.info('source', 'fallback query hit', { query: queries[i][0], type: queries[i][1] });
+            return ok(json);
+          }
+          next(i + 1);
+        }, function (xhr, status) {
+          lastError = { xhr: xhr, status: status };
+          next(i + 1);
+        });
+      })(0);
+    }
+
+    // The logger is a no-op in this build; tell the viewer why nothing shows.
+    function notifyFailure(stage, xhr, e) {
+      var detail = xhr ? 'HTTP ' + (xhr.status || 0) : (e ? String(e && e.message || e).slice(0, 80) : '');
+      try { Lampa.Noty.show('KinoPub: ' + stage + (detail ? ' (' + detail + ')' : '')); } catch (ignore) {}
+    }
 
     function openMatch(self, card, items) {
         if (card) {
@@ -2236,6 +2275,7 @@
       KP.item(network, id, function (json) {
         if (!json || !json.item) {
           Logger.warn('source', 'item empty', json);
+          notifyFailure('empty', null);
           component.doesNotAnswer();
           return;
         }
@@ -2244,10 +2284,12 @@
           component.loading(false);
         } catch (e) {
           Logger.error('source', 'parse error', { msg: String(e), stack: String(e && e.stack).slice(0, 600) });
+          notifyFailure('parse', null, e);
           component.doesNotAnswer();
         }
       }, function (xhr, status) {
         Logger.error('source', 'find error', { http: xhr && xhr.status, status: status });
+        notifyFailure('item', xhr);
         component.doesNotAnswer();
       });
     };
