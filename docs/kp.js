@@ -2157,6 +2157,29 @@
           Logger.info('source', 'single result, taking it', { id: card.id });
         }
 
+        var parts = isSerial ? laterSeasonParts(card ? parseInt(card.year || 0, 10) : year) : [];
+        if (parts.length) {
+          // TMDB folds later anime parts into one show (JoJo 2012 → season 6
+          // "Steel Ball Run", 2026); kinopub lists them as separate items.
+          Logger.info('source', 'searching later season parts', parts);
+          searchSeasonParts(parts, function (extras) {
+            extras = extras.filter(function (c) { return !card || c.id !== card.id; });
+            if (!extras.length) return openMatch(self, card, items);
+            Logger.info('source', 'season parts found, showing choice', { count: extras.length });
+            waitSimilars = true;
+            component.similars(extras.concat(card ? [card] : []).map(adaptSimilar));
+            component.loading(false);
+          });
+          return;
+        }
+        openMatch(self, card, items);
+      }, function (xhr, status) {
+        Logger.error('source', 'search error', { http: xhr && xhr.status, status: status });
+        component.doesNotAnswer();
+      });
+    };
+
+    function openMatch(self, card, items) {
         if (card) {
           Logger.info('source', 'matched card', { id: card.id, title: card.title, year: card.year, type: card.type });
           self.find(card.id);
@@ -2169,11 +2192,42 @@
           Logger.warn('source', 'nothing found');
           component.doesNotAnswer();
         }
-      }, function (xhr, status) {
-        Logger.error('source', 'search error', { http: xhr && xhr.status, status: status });
-        component.doesNotAnswer();
-      });
-    };
+    }
+
+    // Named TMDB seasons that started well after the matched kinopub item.
+    function laterSeasonParts(baseYear) {
+      var seasons = (object.movie && object.movie.seasons) || [];
+      var generic = /^(season|сезон|спецматериалы|specials)\s*\d*$|^\d+\s*сезон$/i;
+      return seasons.filter(function (s) {
+        var y = parseInt(String(s.air_date || '').slice(0, 4), 10);
+        var name = String(s.name || '').trim();
+        return s.season_number > 0 && y > baseYear + 1 && name && !generic.test(name);
+      }).map(function (s) {
+        return { name: String(s.name).trim(), year: parseInt(String(s.air_date).slice(0, 4), 10) };
+      }).slice(-6);
+    }
+
+    function searchSeasonParts(parts, done) {
+      var found = [];
+      var seen = {};
+      (function next(i) {
+        if (i >= parts.length) return done(found);
+        var part = parts[i];
+        var q = part.name.replace(/[«»"“”„]/g, '').replace(/\s+/g, ' ').trim();
+        KP.search(network, q, 'serial', function (json) {
+          ((json && json.items) || []).forEach(function (c) {
+            var t = splitKpTitle(c.title);
+            var key = normalize(part.name);
+            var titleOk = key && (normalize(t.rus).indexOf(key) >= 0 || normalize(t.orig).indexOf(key) >= 0);
+            if (titleOk && Math.abs(parseInt(c.year || 0, 10) - part.year) <= 1 && !seen[c.id]) {
+              seen[c.id] = true;
+              found.push(c);
+            }
+          });
+          next(i + 1);
+        }, function () { next(i + 1); });
+      })(0);
+    }
 
     this.find = function (id) {
       var self = this;

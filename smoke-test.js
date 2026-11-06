@@ -52,6 +52,8 @@ const syncKeys = [];
 const mediaRequests = [];
 const appliedSubtitles = [];
 let activePlay = null;
+let searchResponder = null;
+const itemRequests = [];
 
 const Lampa = {
   Manifest: {
@@ -71,6 +73,8 @@ const Lampa = {
     this.silent = function (url, ok, err, body, params) {
       apiRequests.push({ url, body, headers: params && params.headers });
       if (url.includes('/v1/items/media-links?')) { mediaRequests.push({ url, ok, err, network: this }); return; }
+      if (url.includes('/v1/items/search?') && searchResponder) { ok(searchResponder(new URL(url).searchParams.get('q'))); return; }
+      if (/\/v1\/items\/\d+$/.test(url)) { itemRequests.push(url); }
       if (url.endsWith('/v1/user')) ok({ user: { username: 'review-user' } });
       else ok({});
     };
@@ -386,6 +390,49 @@ try {
 } catch (error) {
   fail++;
   console.error('FAIL episode subtitle hydration:', error.stack || error);
+}
+
+try {
+  const assert = require('node:assert/strict');
+  const oldJojo = { id: 100, title: 'Невероятные приключения ДжоДжо / JoJo no Kimyou na Bouken', year: 2012, type: 'anime', imdb: 2359704 };
+  const sbr = { id: 200, title: 'Невероятное приключение ДжоДжо: Гонка «Стальной шар» / JoJo no Kimyou na Bouken: Steel Ball Run', year: 2026, type: 'serial', imdb: 0 };
+  const queries = [];
+  searchResponder = (q) => {
+    queries.push(q);
+    if (q === 'Невероятные приключения ДжоДжо') return { items: [oldJojo] };
+    if (q === 'Гонка Стальной шар') return { items: [sbr, oldJojo] };
+    return { items: [] };
+  };
+  function jojoSource(seasons) {
+    const shown = [];
+    const component = { similars: (list) => shown.push(list), loading: () => {}, doesNotAnswer: () => shown.push('none') };
+    const movie = { id: 45790, name: 'Невероятные приключения ДжоДжо', original_name: 'ジョジョの奇妙な冒険',
+      first_air_date: '2012-10-06', imdb_id: 'tt2359704', number_of_seasons: seasons.length, seasons };
+    const src = new sandbox.window.__reviewCreateSource(component, { movie });
+    itemRequests.length = 0;
+    src.searchByTitle({ movie }, movie.name);
+    return shown;
+  }
+  const seasons = [
+    { season_number: 0, name: 'Спецматериалы', air_date: '2013-09-20' },
+    { season_number: 1, name: 'Призрачная кровь/Стремление к бою', air_date: '2012-10-06' },
+    { season_number: 5, name: 'Каменный океан', air_date: '2021-12-01' },
+    { season_number: 6, name: 'Гонка «Стальной шар»', air_date: '2026-03-19' }
+  ];
+  const shown = jojoSource(seasons);
+  assert(queries.includes('Гонка Стальной шар'), 'later named season searched without guillemets');
+  assert.equal(shown.length, 1, 'choice list shown');
+  assert.deepEqual(Array.from(shown[0], x => x.id), [200, 100], 'new part first, IMDB-matched old item kept');
+  assert.equal(itemRequests.length, 0, 'old item not auto-opened');
+  const plain = jojoSource([{ season_number: 1, name: 'Сезон 1', air_date: '2012-10-06' }, { season_number: 2, name: 'Сезон 2', air_date: '2016-01-01' }]);
+  assert(plain.every(x => x === 'none'), 'generic seasons do not trigger a choice');
+  assert.equal(itemRequests.length, 1, 'IMDB match still opens directly');
+  searchResponder = null;
+  pass++;
+  console.log('OK   TMDB later named season finds separate kinopub item (JoJo Steel Ball Run)');
+} catch (error) {
+  fail++;
+  console.error('FAIL later season parts:', error.stack || error);
 }
 
 console.log(`\n=== ${pass} pass, ${fail} fail ===`);
