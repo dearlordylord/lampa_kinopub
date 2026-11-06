@@ -2183,9 +2183,8 @@
     // Kinopub may file a title under another type or a slightly different
     // name; retry before declaring it missing. First non-empty answer wins.
     function fallbackQueries(query, type, orig, rus) {
-      var word = String(rus || query).split(/[^a-zA-Zа-яА-ЯёЁ0-9]+/).sort(function (x, y) { return y.length - x.length; })[0] || '';
-      if (word.length > 6) word = word.slice(0, -1);
-      var list = [[query, type], [query, ''], [rus, ''], [orig, ''], [word.length >= 4 ? word : '', '']];
+      var list = [[query, type], [query, ''], [rus, ''], [orig, '']];
+      titleStems(rus || query).slice(0, 4).forEach(function (w) { if (w.length >= 4) list.push([w, '']); });
       var seen = {};
       return list.filter(function (q) {
         var key = q[0] + '|' + q[1];
@@ -2195,12 +2194,39 @@
       });
     }
 
+    // Crude Russian/Latin stems: "Невероятные приключения ДжоДжо" ->
+    // ["невероят", "приключен", "джод"]; tolerant to case endings.
+    function titleStems(title) {
+      return String(title || '').toLowerCase().replace(/ё/g, 'е').split(/[^a-zа-я0-9]+/).filter(function (w) {
+        return w.length >= 3;
+      }).map(function (w) { return w.length > 5 ? w.slice(0, -2) : (w.length > 3 ? w.slice(0, -1) : w); });
+    }
+
+    function relevance(c, stems) {
+      if (!stems.length) return 0;
+      var t = normalize(c.title).replace(/ё/g, 'е');
+      return stems.filter(function (w) { return t.indexOf(normalize(w)) >= 0; }).length / stems.length;
+    }
+
+    // Keep only candidates that carry every word of the title (falling back
+    // to most of them), newest first; fuzzy kinopub search returns noise.
+    function relevantSimilars(items) {
+      var stems = titleStems(object.movie.name || object.movie.title || '');
+      var scored = items.map(function (c) { return { c: c, r: relevance(c, stems) }; });
+      var full = scored.filter(function (x) { return x.r === 1; });
+      var keep = full.length ? full : scored.filter(function (x) { return x.r >= 0.6; });
+      return keep.map(function (x) { return x.c; }).sort(function (x, y) {
+        return parseInt(y.year || 0, 10) - parseInt(x.year || 0, 10);
+      });
+    }
+
     function searchWithFallbacks(queries, ok, err) {
       var lastError = null;
       (function next(i) {
         if (i >= queries.length) return lastError ? err(lastError.xhr, lastError.status) : ok({ items: [] });
         KP.search(network, queries[i][0], queries[i][1], function (json) {
-          if (json && json.items && json.items.length) {
+          var stemQuery = i >= 4;
+          if (json && json.items && json.items.length && (!stemQuery || relevantSimilars(json.items).length)) {
             if (i) Logger.info('source', 'fallback query hit', { query: queries[i][0], type: queries[i][1] });
             return ok(json);
           }
@@ -2223,9 +2249,12 @@
           Logger.info('source', 'matched card', { id: card.id, title: card.title, year: card.year, type: card.type });
           self.find(card.id);
         } else if (items.length) {
-          Logger.warn('source', 'no exact match, showing similars', { count: items.length });
+          var relevant = relevantSimilars(items);
+          Logger.warn('source', 'no exact match, showing similars', { count: items.length, relevant: relevant.length });
+          if (relevant.length === 1) return self.find(relevant[0].id);
+          if (!relevant.length) return component.doesNotAnswer();
           waitSimilars = true;
-          component.similars(items.map(adaptSimilar));
+          component.similars(relevant.map(adaptSimilar));
           component.loading(false);
         } else {
           Logger.warn('source', 'nothing found');
@@ -2255,9 +2284,7 @@
         var q = part.name.replace(/[«»"“”„]/g, '').replace(/\s+/g, ' ').trim();
         KP.search(network, q, 'serial', function (json) {
           ((json && json.items) || []).forEach(function (c) {
-            var t = splitKpTitle(c.title);
-            var key = normalize(part.name);
-            var titleOk = key && (normalize(t.rus).indexOf(key) >= 0 || normalize(t.orig).indexOf(key) >= 0);
+            var titleOk = relevance(c, titleStems(part.name)) >= 0.6;
             if (titleOk && Math.abs(parseInt(c.year || 0, 10) - part.year) <= 1 && !seen[c.id]) {
               seen[c.id] = true;
               found.push(c);
